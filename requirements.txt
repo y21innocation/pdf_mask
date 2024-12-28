@@ -1,0 +1,7 @@
+Flask
+pdfplumber
+reportlab
+PyPDF2
+pdf2image
+gunicorn
+Pillow
