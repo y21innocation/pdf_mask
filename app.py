@@ -146,6 +146,13 @@ def extract_mask_positions(input_pdf_path):
                     for w in line_words:
                         token_text = w['text']
                         if MONEY_PATTERN.search(token_text):
+                            # --- 追加部分：バウンディングボックスのサイズが大きすぎる場合はスキップする ---
+                            box_width = w['x1'] - w['x0']
+                            box_height = w['bottom'] - w['top']
+                            # ここでは横幅がページ幅の50%以上、または縦幅がページ高さの20%以上の場合は無視する例
+                            if box_width / page_width > 0.5 or box_height / page_height > 0.2:
+                                continue
+                            # ------------------------------------------------------------------------------
                             mask_positions.append({
                                 "page": page_idx,
                                 "x0": w['x0'],
@@ -274,4 +281,3 @@ def upload():
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)
-
