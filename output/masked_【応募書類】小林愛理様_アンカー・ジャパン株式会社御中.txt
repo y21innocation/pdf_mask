@@ -4,4 +4,5 @@ Page: 1, Keyword: 30万円
 Page: 1, Keyword: 20万円
 Page: 8, Keyword: 想定年収：400万円～600万円
 Page: 8, Keyword: 月額：285,715円～428,572円
+Page: 8, Keyword: 年額(基本給)：2,959,810円～4,437,608円
 Page: 8, Keyword: ※固定残業手当は月、45時間0分、74,300円～111,600円を支給
