@@ -1,0 +1,2 @@
+Page:1, RedactedText:[mask in SALARY-line] line=(直近の年収 450万円以上 就業状況 就業している), matched=(450万)
+Page:2, RedactedText:[mask in SALARY-line] line=(希望年収 600万円以上), matched=(600万)

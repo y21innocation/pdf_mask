@@ -5,4 +5,4 @@ PyPDF2
 pdf2image
 gunicorn
 Pillow
-PyMuPDF==1.22.5
+PyMuPDF

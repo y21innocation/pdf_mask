@@ -1,0 +1,4 @@
+Page:1, RedactedText:[mask in SALARY-line] line=(年収　450　万 東京都　　海外　　), matched=(450　万)
+Page:1, RedactedText:[mask in SALARY-line] line=(月収 27 万 その他特記事項（転職理由や転職にあたっての条件等）), matched=(27 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(年間賞与 0 万 退職後は今後の日本社会のグローバル化を見据えてアメリカ留学をし、英語での基本的なコ), matched=(0 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 324 万), matched=(324 万)

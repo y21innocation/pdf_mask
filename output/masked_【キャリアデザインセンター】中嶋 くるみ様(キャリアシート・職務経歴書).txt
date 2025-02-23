@@ -1,0 +1,5 @@
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 409 万円（ 月収 25 万円 年間賞与 109 万円）), matched=(409 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 409 万円（ 月収 25 万円 年間賞与 109 万円）), matched=(25 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 409 万円（ 月収 25 万円 年間賞与 109 万円）), matched=(109 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(希望年収 最低 450 万円希望 500 万円転勤可(転居不可)), matched=(450 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(希望年収 最低 450 万円希望 500 万円転勤可(転居不可)), matched=(500 万)

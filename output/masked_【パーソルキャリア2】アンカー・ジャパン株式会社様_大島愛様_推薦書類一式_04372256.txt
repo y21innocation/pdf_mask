@@ -1,0 +1,5 @@
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 600 万円 うち年間賞与 0 万円), matched=(600 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 600 万円 うち年間賞与 0 万円), matched=(0 万)
+Page:1, RedactedText:[mask in SALARY-line] line=(税込 月収 40 万円 うち残業手当 万円), matched=(40 万)
+Page:8, RedactedText:[mask in SALARY-line] line=(賃金 想定年収：400万円～800万円 賃金形態：年俸制), matched=(400万)
+Page:8, RedactedText:[mask in SALARY-line] line=(賃金 想定年収：400万円～800万円 賃金形態：年俸制), matched=(800万)

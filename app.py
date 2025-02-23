@@ -1,220 +1,184 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, render_template, request, send_from_directory
 import os
 import re
-import pdfplumber
-from io import BytesIO
 import zipfile
-from pdf2image import convert_from_path
-from PIL import Image, ImageDraw
 import tempfile
-from reportlab.pdfgen import canvas
+from flask import Flask, render_template, request, send_from_directory
+import fitz  # PyMuPDF
+import pdfplumber
 
 app = Flask(__name__)
 
-# ---------------------------------------------------------
-# 1) 微小スペースマージ (隣接単語をくっつける)
-# ---------------------------------------------------------
-def merge_adjacent_words(words, x_threshold=5.0, y_threshold=5.0):
-    """
-    同じ行近辺かつ x座標の隙間が小さい単語を結合する。
-    """
-    merged_words = []
-    i = 0
-    while i < len(words):
-        current = words[i]
-        text = current['text']
-        x0 = current['x0']
-        x1 = current['x1']
-        top = current['top']
-        bottom = current['bottom']
-
-        j = i + 1
-        while j < len(words):
-            nxt = words[j]
-            if (abs(nxt['top'] - top) <= y_threshold) and (abs(nxt['bottom'] - bottom) <= y_threshold):
-                gap = nxt['x0'] - x1
-                if 0 <= gap <= x_threshold:
-                    text += nxt['text']  # 単語を連結
-                    x1 = nxt['x1']
-                    top = min(top, nxt['top'])
-                    bottom = max(bottom, nxt['bottom'])
-                    j += 1
-                else:
-                    break
-            else:
-                break
-
-        merged_words.append({
-            'text': text,
-            'x0': x0,
-            'x1': x1,
-            'top': top,
-            'bottom': bottom
-        })
-        i = j
-
-    return merged_words
-
-
-# ---------------------------------------------------------
-# 2) 行単位にグルーピング
-# ---------------------------------------------------------
-def group_words_by_line(words, line_threshold=5.0):
-    """
-    top座標が近い(±line_threshold px以内)の単語を同じ行とみなす。
-    戻り値: [ (line_words, line_top, line_bottom), ... ]
-    """
-    if not words:
-        return []
-
-    # top座標でソート
-    words_sorted = sorted(words, key=lambda w: w['top'])
-    lines = []
-
-    current_line = [words_sorted[0]]
-    current_top = words_sorted[0]['top']
-    current_bottom = words_sorted[0]['bottom']
-
-    for w in words_sorted[1:]:
-        if abs(w['top'] - current_top) <= line_threshold:
-            current_line.append(w)
-            current_top = min(current_top, w['top'])
-            current_bottom = max(current_bottom, w['bottom'])
-        else:
-            lines.append((current_line, current_top, current_bottom))
-            current_line = [w]
-            current_top = w['top']
-            current_bottom = w['bottom']
-
-    if current_line:
-        lines.append((current_line, current_top, current_bottom))
-
-    # 各行の単語を x0で再ソート
-    grouped_lines = []
-    for (line_words, ltop, lbottom) in lines:
-        lw_sorted = sorted(line_words, key=lambda x: x['x0'])
-        grouped_lines.append((lw_sorted, ltop, lbottom))
-
-    return grouped_lines
-
-
-# ---------------------------------------------------------
-# 3) キーワードと金額の正規表現
-# ---------------------------------------------------------
-KEYWORD_PATTERN = re.compile(
-    r"(年収|現年収|希望年収|月収|手当|賞与|残業代|最低希望年収|月給|年棒|月額|現在年収|年額|基本給)",
-    re.IGNORECASE
-)
-
+# ---- 「金額っぽい文字列」を検出する正規表現パターン ----
+#   - 半角数字 [0-9] / 全角数字 [０-９]
+#   - 途中のカンマ,ドットも許容
+#   - 「万」「万円」「円」「¥」などを含む
 MONEY_PATTERN = re.compile(
-    r"\d[\d,\.]*\s*(万|万円|円)",  # 例: 400万, 400万円, 400,000円
+    r"[0-9０-９][0-9０-９,\.]*\s*(万|万円|円|¥)",
     re.IGNORECASE
 )
 
-
-# ---------------------------------------------------------
-# 4) マスク抽出
-#    → 「キーワードがある行」だけを対象に、行内の「金額トークン」をマスク
-# ---------------------------------------------------------
-def extract_mask_positions(input_pdf_path):
-    mask_positions = []
-
-    with pdfplumber.open(input_pdf_path) as pdf:
-        for page_idx, page in enumerate(pdf.pages):
-            page_width = page.width
-            page_height = page.height
-
-            # A) 単語抽出
-            raw_words = page.extract_words()
-            raw_words = sorted(raw_words, key=lambda w: (round(w['top']), w['x0']))
-
-            # B) 微小スペースマージ
-            merged_words = merge_adjacent_words(raw_words, x_threshold=5.0, y_threshold=5.0)
-
-            # C) 行単位にまとめる
-            lines = group_words_by_line(merged_words, line_threshold=5.0)
-
-            for (line_words, ltop, lbottom) in lines:
-                # 行のテキストを取得
-                line_text = " ".join([w['text'] for w in line_words])
-                line_text_lower = line_text.lower()
-
-                # 1) 行にキーワードが含まれているか?
-                if KEYWORD_PATTERN.search(line_text_lower):
-                    # 2) 含まれていれば、この行の中にある金額トークンだけマスク
-                    for w in line_words:
-                        token_text = w['text']
-                        if MONEY_PATTERN.search(token_text):
-                            # --- 追加部分：バウンディングボックスのサイズが大きすぎる場合はスキップする ---
-                            box_width = w['x1'] - w['x0']
-                            box_height = w['bottom'] - w['top']
-                            # ここでは横幅がページ幅の50%以上、または縦幅がページ高さの20%以上の場合は無視する例
-                            if box_width / page_width > 0.5 or box_height / page_height > 0.2:
-                                continue
-                            # ------------------------------------------------------------------------------
-                            mask_positions.append({
-                                "page": page_idx,
-                                "x0": w['x0'],
-                                "y0": w['top'],
-                                "x1": w['x1'],
-                                "y1": w['bottom'],
-                                "keyword": w['text'],  # デバッグ用
-                                "page_width": page_width,
-                                "page_height": page_height
-                            })
-
-    return mask_positions
+# ---- 「年収に関わる記載」かどうかを判定するキーワード ----
+#     例: 年収 / 給与 / 月給 / 賞与 など
+#     必要に応じて増減してください
+KEYWORDS_PATTERN = re.compile(r"(年収|給与|月給|賞与|月収|年俸|手当|給料|日給|時給)", re.IGNORECASE)
 
 
-# ---------------------------------------------------------
-# 5) 画像マスキング
-# ---------------------------------------------------------
-def mask_images(image_paths, mask_positions):
-    masks_by_page = {}
-    for pos in mask_positions:
-        p = pos['page']
-        if p not in masks_by_page:
-            masks_by_page[p] = []
-        masks_by_page[p].append(pos)
+def extract_table_rows_as_strings(pdfp_page):
+    """
+    pdfplumberのextract_table()で抽出したテーブルをログ出力用に取得
+    """
+    print("[DEBUG] extract_table_rows_as_strings() called")
+    table_settings = {
+        "vertical_strategy": "lines",
+        "horizontal_strategy": "lines",
+    }
+    raw_table = pdfp_page.extract_table(table_settings=table_settings)
+    results = []
+    if raw_table:
+        for i, row in enumerate(raw_table):
+            if not row:
+                continue
+            row_text = " ".join(cell.strip() for cell in row if cell)
+            if row_text.strip():
+                results.append(row_text)
+                print(f"[DEBUG]  Table row {i}: {repr(row_text)}")
+    return results
 
-    for page_idx, img_path in enumerate(image_paths):
-        with Image.open(img_path) as im:
-            draw = ImageDraw.Draw(im)
-            if page_idx in masks_by_page:
-                for m in masks_by_page[page_idx]:
-                    pdf_w = m['page_width']
-                    pdf_h = m['page_height']
-                    img_w, img_h = im.size
-
-                    scale_x = img_w / pdf_w
-                    scale_y = img_h / pdf_h
-
-                    ix0 = m['x0'] * scale_x
-                    iy0 = m['y0'] * scale_y
-                    ix1 = m['x1'] * scale_x
-                    iy1 = m['y1'] * scale_y
-
-                    draw.rectangle([ix0, iy0, ix1, iy1], fill="white")
-            im.save(img_path)
-
-
-# ---------------------------------------------------------
-# 6) PDF再生成 (ページサイズを保持)
-# ---------------------------------------------------------
-def images_to_pdf(image_paths, page_sizes, output_pdf_path):
-    c = canvas.Canvas(output_pdf_path, pagesize=(1, 1))
-    for i, image_path in enumerate(image_paths):
-        w, h = page_sizes[i]
-        c.setPageSize((w, h))
-        c.drawImage(image_path, 0, 0, width=w, height=h)
-        c.showPage()
-    c.save()
+def extract_non_table_text_as_lines(pdfp_page):
+    """
+    pdfplumberのextract_text() => 行(改行)ごとログ出力用
+    """
+    print("[DEBUG] extract_non_table_text_as_lines() called")
+    full_text = pdfp_page.extract_text()
+    results = []
+    if full_text:
+        lines = full_text.splitlines()
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line:
+                results.append(line)
+                print(f"[DEBUG]  Non-table line {i}: {repr(line)}")
+    return results
 
 
-# ---------------------------------------------------------
-# Flaskアプリ
-# ---------------------------------------------------------
+def mask_money_in_salary_lines_by_words(page, removed_items, page_idx):
+    """
+    1) PyMuPDFの page.get_text("words") ですべてのワードを取得
+    2) y座標（ベースライン）が近いワード同士を同じ「行」としてグループ化
+    3) 各「行テキスト」を連結し、その行が「年収/給与等のキーワード」を含むかをチェック
+       => 含む行だけ、金額の正規表現(MONEY_PATTERN)にマッチする単語をマスキング
+    4) 該当マッチに被る単語（複数の場合もある）をまとめて bounding box で塗りつぶし
+    5) ログには「該当行(line_text)」＋「実際にマッチした金額文字列」を記録
+    """
+
+    words = page.get_text("words")  # [x0, y0, x1, y1, "text", block_no, line_no, word_no]
+    if not words:
+        return
+
+    # 1) ソート: y0(上端)が小さい順でソート
+    words.sort(key=lambda w: (w[1], w[0]))  # (y0, x0) の順
+    
+    lines = []
+    threshold = 2.0  # 同じ行とみなす y 座標差
+    current_line = None
+
+    for w in words:
+        x0, y0, x1, y1, txt = w[0], w[1], w[2], w[3], w[4]
+        mid_y = (y0 + y1) / 2.0
+
+        if current_line is None:
+            # 最初の行を新規作成
+            current_line = {
+                'y': mid_y,
+                'items': [(x0, y0, x1, y1, txt)]
+            }
+        else:
+            prev_y = current_line['y']
+            if abs(mid_y - prev_y) <= threshold:
+                # 同じ行とみなす
+                current_line['items'].append((x0, y0, x1, y1, txt))
+                # 行の中心yを平均で更新
+                total = prev_y * (len(current_line['items']) - 1) + mid_y
+                current_line['y'] = total / len(current_line['items'])
+            else:
+                # 新しい行
+                lines.append(current_line)
+                current_line = {
+                    'y': mid_y,
+                    'items': [(x0, y0, x1, y1, txt)]
+                }
+
+    # 最後の行を追加
+    if current_line is not None:
+        lines.append(current_line)
+
+    # 2) 行ごとにワードを x 座標順にソート => line_text を作る
+    for line_obj in lines:
+        line_obj['items'].sort(key=lambda i: i[0])  # x0順でソート
+
+        # 行テキストおよびトークンの文字オフセット管理
+        line_text_parts = []
+        index_map = []  # [(start, end, (x0,y0,x1,y1, txt)), ... ]
+        current_offset = 0
+
+        for item in line_obj['items']:
+            token = item[4]
+            # 単語間にスペースを1つ入れる
+            if line_text_parts:
+                line_text_parts.append(" ")
+                current_offset += 1
+
+            start_idx = current_offset
+            line_text_parts.append(token)
+            current_offset += len(token)
+            end_idx = current_offset
+
+            index_map.append((start_idx, end_idx, item))
+
+        line_text = "".join(line_text_parts)
+
+        # 3) 「年収/給与」などキーワードを含む行だけ処理
+        if not KEYWORDS_PATTERN.search(line_text):
+            # 年収に関わるキーワードが無い行 => スキップ
+            continue
+
+        # (行をログなどで参照したい場合はここに出力可)
+        # print(f"[DEBUG] line has '年収/給与' => {line_text}")
+
+        # 4) line_text から正規表現で金額部分だけ探し、マッチ範囲に被る単語の bbox を union
+        for match in MONEY_PATTERN.finditer(line_text):
+            match_start = match.start()
+            match_end = match.end()
+            matched_str = match.group(0)
+
+            # このマッチ範囲に一部でも被るトークンを取得
+            hit_tokens = []
+            for (tk_start, tk_end, tk_item) in index_map:
+                # トークンが [tk_start, tk_end) と [match_start, match_end) で1文字以上重なる？
+                if not (tk_end <= match_start or tk_start >= match_end):
+                    hit_tokens.append(tk_item)
+
+            if hit_tokens:
+                # bbox の union
+                min_x = min(t[0] for t in hit_tokens)
+                min_y = min(t[1] for t in hit_tokens)
+                max_x = max(t[2] for t in hit_tokens)
+                max_y = max(t[3] for t in hit_tokens)
+
+                # PDF 上に redact 注釈を追加
+                page.add_redact_annot(fitz.Rect(min_x, min_y, max_x, max_y), fill=(1,1,1))
+
+                # ログ出力用に
+                removed_items.append(
+                    (
+                        page_idx + 1,
+                        f"[mask in SALARY-line] line=({line_text}), matched=({matched_str.strip()})"
+                    )
+                )
+                print(f"[DEBUG] SALARY line mask => line={line_text!r}  matched={matched_str!r}")
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -223,61 +187,68 @@ def index():
 def upload():
     files = request.files.getlist('file')
     if not files:
-        return 'No files uploaded', 400
+        return "No files uploaded", 400
 
     with tempfile.TemporaryDirectory() as tmpdir:
         if not os.path.exists('output'):
             os.makedirs('output')
 
-        output_files = []
-        text_files = []
+        output_pdfs = []
+        log_files = []
 
-        for file in files:
-            input_path = os.path.join(tmpdir, file.filename)
-            file.save(input_path)
+        for file_ in files:
+            in_pdf_path = os.path.join(tmpdir, file_.filename)
+            file_.save(in_pdf_path)
 
-            # 1) マスク対象抽出
-            mask_positions = extract_mask_positions(input_path)
+            # PyMuPDF (fitz) で PDF を開く
+            doc = fitz.open(in_pdf_path)
+            # pdfplumber でも開く => テキスト抽出やテーブル抽出
+            plumber_pdf = pdfplumber.open(in_pdf_path)
 
-            # 2) テキストファイル出力（デバッグ用）
-            output_txt_path = os.path.join('output', 'masked_' + file.filename.replace('.pdf', '.txt'))
-            with open(output_txt_path, "w", encoding="utf-8") as txtf:
-                for m in mask_positions:
-                    txtf.write(f"Page: {m['page']+1}, Keyword: {m['keyword']}\n")
+            removed_items = []  # (page_num, log_message) を append していく
 
-            # 3) PDF → PNG
-            images = convert_from_path(input_path, dpi=150, fmt='png')
-            image_paths = []
-            page_sizes = []
-            for idx, img in enumerate(images):
-                img_path = os.path.join(tmpdir, f"page_{idx}.png")
-                img.save(img_path, "PNG")
-                image_paths.append(img_path)
-                page_sizes.append(img.size)
+            for pindex in range(len(doc)):
+                page = doc[pindex]
+                pdfp_page = plumber_pdf.pages[pindex]
 
-            # 4) マスク描画
-            mask_images(image_paths, mask_positions)
+                # ★ デバッグやログ用: テーブル行/非テーブル行を出力する
+                table_rows = extract_table_rows_as_strings(pdfp_page)
+                non_table_lines = extract_non_table_text_as_lines(pdfp_page)
 
-            # 5) PNG → PDF
-            output_pdf_path = os.path.join('output', 'maskedfix_' + file.filename)
-            images_to_pdf(image_paths, page_sizes, output_pdf_path)
+                # ★「行テキストに年収/給与キーワードがあれば、金額だけマスク」処理
+                mask_money_in_salary_lines_by_words(page, removed_items, pindex)
 
-            output_files.append(output_pdf_path)
-            text_files.append(output_txt_path)
+                # レダクション適用
+                page.apply_redactions()
 
-        # 6) ZIPにまとめて返す
-        zip_filename = "maskedfix_and_texts.zip"
-        zip_filepath = os.path.join("output", zip_filename)
+            # 保存
+            out_pdf_name = f"maskedfix_{file_.filename}"
+            out_pdf_path = os.path.join('output', out_pdf_name)
+            doc.save(out_pdf_path, deflate=True, clean=True)
+            doc.close()
+            plumber_pdf.close()
 
-        try:
-            with zipfile.ZipFile(zip_filepath, 'w') as zipf:
-                for f in output_files + text_files:
-                    zipf.write(f, os.path.basename(f))
-        except Exception as e:
-            return f"An error occurred while creating the ZIP file: {str(e)}", 500
+            # ログ出力
+            out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
+            out_log_path = os.path.join('output', out_log_name)
+            if removed_items:
+                with open(out_log_path, "w", encoding="utf-8") as f:
+                    for (pg, txt) in removed_items:
+                        f.write(f"Page:{pg}, RedactedText:{txt}\n")
+            else:
+                open(out_log_path, "w").close()
 
-        return send_from_directory(directory='output', path=zip_filename, as_attachment=True)
+            output_pdfs.append(out_pdf_path)
+            log_files.append(out_log_path)
 
+        # ZIP圧縮して返す
+        zip_name = "maskedfix_and_texts.zip"
+        zip_path = os.path.join('output', zip_name)
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            for path_ in output_pdfs + log_files:
+                zf.write(path_, os.path.basename(path_))
+
+        return send_from_directory('output', zip_name, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)

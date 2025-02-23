@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "spry-truck-450606-g3",
+  "private_key_id": "fb81463798f10ffa31eef3f4235b7fcd494d355a",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCU8rmgTIeLeLgb\n7x/9Kh9oyyVnRsWGcRZg2F2dXPFAyp9RD4ImecE8zCZSI3W9lUawDEDNI3AjsOzx\nAYbuWrqJWcd35T5plcHSFwRM0dzdNG97LxnrcK+iIgmRoi5Eu5fwHYTshyflFyT6\nFy0Ba5qnfmI6QnPmLijzyDWKPdmXw0CVQSAoqjltvsvvuCCXUTHTrKzh2QCq8xWX\n08QZexFjW+kEmT00hQNvwz01J89xZGMvrA4tWV/ZOqkQmeQFv3Ha++sXhIpY5gCV\nKSX+HPAMaceYsyq8BAqgI+anIGSEVKg47scHXmvMjDyjGQLVi0uN735uCZq5QHNr\nrze4k3g7AgMBAAECggEABRD5LGZ9/nSlj9mt37QaQREWiBvu+w2HV9We4DaO7t0V\ngdyCWPcE53cANK9dFreS9x5WPplee/BNgZMY46xKslekl8OV6wx7fRRoV96UNyKh\n9MbbiFfFuZY+d2l/TmTdHFSSDA461qmCCfmrf7lebM+5MpxxCcV3LMzvY/DfoQWn\nYefwSQD6yUK405P17mIJgsQIoBKvUVeMGRaZ2gc+YdtNtuVVZAfk/QvvQRcWMtHV\nRIJdxWTR0aOfK+/wt3IsZZ0nE/UFNyInSho3q6qJA3Cz3k1qwRin97GMoaE3ZciY\neM5RxEq42XGKlsoc+VU7ZUIOAzhJtO8iWZi9QbJ9rQKBgQDJV9soEEhUNgmPIkpL\nuiid/gGSyred5fyhbKF16M+MYb5I3b0MOHItPQFVMyMMWUN9L22+nCbTNgiI/dW8\nDUY1iu6RS5RhfRDh98jh6R8VN7gPIXQYM75Xdq5pV9X/Xdaad4yAe7EOGHbICf3r\n8Ix3EfgK3B1f3eCkMd2S2F5QvwKBgQC9YbpRLicVIt0FG7yhbtt0aPJuRpnKRsSP\n7PLrhtjpRS2qniLhpSAPdA2vnjiFtAp0xD4gIIckyZ3xzgB35NkvKy61j6xr/B4v\nwQ10CqHdlv/uImJhKJ6xw0lkNywcuVFLNOs8AXeaqkIf+sYsJXR/LXWSxndjMrXG\nEclao2i7hQKBgAjCRKtqger/6syKPlcrAwdUfHcJUJGS5rmTAzcg6J5/xgpfcxDs\nB7OGGt+8+MJZw8DXZlvLaTj4+cgT2s9yeGJt59D0S8Et8qUR5XBGdu6yXNRzrRw8\nbARcClxU0N9qEqLnnnocZ2hokgpDvQMdlM69PmAikTiRa2tZK/1uYjP7AoGAJtic\nAjjoVWKQWZLl72sw4sEAMXST6TT47tjYv00qwzaodl33o7deSy0v/X0D9REIMAlt\nAOQLNJWSq13pJK6xigZej2mIIaJWgs8jtlDUAQMPPkaZTXqqiqYXMNJMXxv4O+f/\n9JAMe5I+/BZRfg60xb2KZ3AEXzmwpY9ScSAhxI0CgYEArWHsVK/1j9Yx+avsC1Cw\nObqwNk2CBsKvGHQe3tv5SGnaQrYCS5lZrCVNR1WhRs7J/QUPjGlGvb7aJB8DY+iI\nkOhw+P2rfRNqq0qX/KaifoWpYjhUcgXuxR6mgJNiKhrYg+IWAeIKmcX2fSvJW9ym\ntnTP7vrJml7e5T9LbOvAU/E=\n-----END PRIVATE KEY-----\n",
+  "client_email": "pdfmask@spry-truck-450606-g3.iam.gserviceaccount.com",
+  "client_id": "112720724947172593337",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/pdfmask%40spry-truck-450606-g3.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

@@ -1,0 +1,1 @@
+Page:1, RedactedText:[mask in SALARY-line] line=(年収 350万円), matched=(350万)

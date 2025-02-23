@@ -1,0 +1,3 @@
+Page:2, RedactedText:[mask in SALARY-line] line=(給与 年収 384 万円 月収 32 万円), matched=(384 万)
+Page:2, RedactedText:[mask in SALARY-line] line=(給与 年収 384 万円 月収 32 万円), matched=(32 万)
+Page:2, RedactedText:[mask in SALARY-line] line=(給与 年収 　 万円 月収 28 万円), matched=(28 万)
