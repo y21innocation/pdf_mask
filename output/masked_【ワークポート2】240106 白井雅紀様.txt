@@ -1,3 +1,3 @@
-Page:1, RedactedText:[mask in SALARY-line] line=(・現年収：480万円), matched=(480万)
-Page:1, RedactedText:[mask in SALARY-line] line=(・希望年収：480万円～500万円), matched=(480万)
-Page:1, RedactedText:[mask in SALARY-line] line=(・希望年収：480万円～500万円), matched=(500万)
+Page:1, RedactedText:[mask near SALARY-lines] line_index=32, match=(480万), text=(・現年収：480万円)
+Page:1, RedactedText:[mask near SALARY-lines] line_index=33, match=(480万), text=(・希望年収：480万円～500万円)
+Page:1, RedactedText:[mask near SALARY-lines] line_index=33, match=(500万), text=(・希望年収：480万円～500万円)

@@ -1,0 +1,1 @@
+Page:1, RedactedText:[mask near SALARY-lines] line_index=14, match=(500万), text=(・500万円未満)
