@@ -43,7 +43,7 @@
             cursor: pointer;
             font-size: 14px;
         }
-        button {
+        .btn {
             background-color: #28a745;
             color: white;
             border: none;
@@ -52,18 +52,47 @@
             cursor: pointer;
             font-size: 16px;
             transition: background-color 0.3s ease;
+            margin: 5px;
         }
-        button:hover {
+        .btn:hover {
             background-color: #218838;
         }
+        /* Resetボタンだけ少し色を変える場合 */
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+        .btn-secondary:hover {
+            background-color: #5a6268;
+        }
     </style>
+
+    <script>
+        // 送信前チェック用
+        function checkFilesSelected() {
+            const fileInput = document.getElementById('file');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert("No file selected. Please select at least one PDF file.");
+                return false; // 送信中断
+            }
+            return true; // 送信続行
+        }
+
+        // ファイルリセット用
+        function resetFileSelection() {
+            const fileInput = document.getElementById('file');
+            fileInput.value = ""; // ファイル選択をリセット
+        }
+    </script>
 </head>
 <body>
-    <form action="/upload" method="post" enctype="multipart/form-data">
+    <form action="/upload" method="post" enctype="multipart/form-data" onsubmit="return checkFilesSelected()">
         <h1>PDF Masking Tool</h1>
         <label for="file">Choose PDF files to upload:</label>
         <input type="file" name="file" id="file" accept=".pdf" multiple>
-        <button type="submit">Upload and Mask</button>
+
+        <!-- ボタンを2つ用意: Reset Files / Upload and Mask -->
+        <button type="button" class="btn btn-secondary" onclick="resetFileSelection()">Reset Files</button>
+        <button type="submit" class="btn">Upload and Mask</button>
     </form>
 </body>
 </html>
