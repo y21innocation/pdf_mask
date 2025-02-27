@@ -16,7 +16,7 @@ MONEY_PATTERN = re.compile(
 )
 
 # ---- 「年収に関わる記載」かどうかを判定するキーワード ----
-KEYWORDS_PATTERN = re.compile(r"(年収|給与|月給|賞与|月収|年俸|手当|給料|日給|時給)", re.IGNORECASE)
+KEYWORDS_PATTERN = re.compile(r"(年収|給与|月給|賞与|月収|年俸|手当|給料|日給|時給|インセンティブ)", re.IGNORECASE)
 
 # ---- 前後何行を「関連行」とみなすか ----
 NEAR_RANGE = 2  # 前後2行
