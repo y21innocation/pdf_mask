@@ -1,0 +1,2 @@
+Page:1, RedactedText:[mask near SALARY-lines] line_index=25, match=(500万), text=(　年　　収 ：500万円　（現在：480-490万円）)
+Page:1, RedactedText:[mask near SALARY-lines] line_index=25, match=(490万), text=(　年　　収 ：500万円　（現在：480-490万円）)

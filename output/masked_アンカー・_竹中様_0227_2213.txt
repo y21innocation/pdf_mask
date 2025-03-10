@@ -1,0 +1,11 @@
+Page:2, RedactedText:[mask money pattern] line=(年収: 420万円 年収: 400万円), matched=(420万円)
+Page:2, RedactedText:[mask money pattern] line=(年収: 420万円 年収: 400万円), matched=(400万円)
+Page:2, RedactedText:[mask money pattern] line=(・月収 30万円・役職手当), matched=(30万円)
+Page:2, RedactedText:[mask all digits in KW-line] line=(・年間賞与 110 0.8万円) => masked 1 numeric tokens
+Page:2, RedactedText:[mask money pattern] line=(・年間賞与 110 0.8万円), matched=(0.8万円)
+Page:2, RedactedText:[mask money pattern] line=(・年収 470万円), matched=(470万円)
+Page:2, RedactedText:[mask money pattern] line=(・寮・社宅の自己負担 3万円/月), matched=(3万円)
+Page:8, RedactedText:[mask money pattern] line=(想定年収310万円~550万円), matched=(310万円)
+Page:8, RedactedText:[mask money pattern] line=(想定年収310万円~550万円), matched=(550万円)
+Page:8, RedactedText:[mask money pattern] line=(年俸制 (分割回数12回)年俸 3,100,008円~5,500,000円), matched=(3,100,008円)
+Page:8, RedactedText:[mask money pattern] line=(年俸制 (分割回数12回)年俸 3,100,008円~5,500,000円), matched=(5,500,000円)
