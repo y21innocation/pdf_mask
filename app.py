@@ -11,9 +11,9 @@ import pdfplumber
 app = Flask(__name__)
 
 # ---- 「金額っぽい文字列」を検出する正規表現パターン ----
-# 例: "110万円", "110 万円", "110円", "¥100.5" などを広めに扱う想定
+#  「万」単体でもマッチするように (...|万) を追加
 MONEY_PATTERN = re.compile(
-    r"[0-9０-９][0-9０-９,\.]*\s*(万\s*円|万円|円|¥|￥)",
+    r"[0-9０-９][0-9０-９,\.]*\s*(万\s*円|万円|円|¥|￥|万)",
     re.IGNORECASE
 )
 
@@ -38,8 +38,8 @@ def normalize_and_remove_invisible_chars(text: str) -> str:
 
 def force_reconnect_money_string(line: str) -> str:
     """
-    例: "年間賞与 110 万円  0.8万円" => "年間賞与 110万円  0.8万円"
-         "・月収  420 万円" => "・月収 420万円"
+    例: "年間賞与 110 万円 0.8万円" => "年間賞与 110万円 0.8万円"
+         "・月収  420 万 円" => "・月収 420万 円"
     """
     pattern = re.compile(r'([0-9０-９][0-9０-９,\.]*)\s+((万|万円|円|¥|￥))')
     replaced = pattern.sub(r'\1\2', line)
@@ -182,9 +182,9 @@ def mask_line_money_pattern(page, ln, removed_items, page_idx):
         m_end   = match.end()
         matched_str = match.group(0)
 
+        # token範囲とマッチ範囲が一部でも被ればOK
         hit_tokens = []
         for (tk_start, tk_end, token_item) in index_map:
-            # オフセットが1文字でもかぶるなら対象
             if not (tk_end <= m_start or tk_start >= m_end):
                 hit_tokens.append(token_item)
 
@@ -226,7 +226,7 @@ def mask_line_all_numbers(page, ln, removed_items, page_idx):
 def mask_money_in_nearby_salary_lines(page, removed_items, page_idx):
     """
     1) 行分割
-    2) キーワード行(kw_line)は「すべての数字トークン」をマスクしたうえで money_pattern もマスク
+    2) キーワード行(kw_line)は「すべての数字トークン」をマスク + money_patternマスク
     3) キーワード行の前後NEAR_RANGE行 => money_patternだけマスク
     4) 他はマスクなし
     """

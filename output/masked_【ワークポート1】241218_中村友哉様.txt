@@ -1,10 +1,17 @@
-Page:1, RedactedText:[mask near SALARY-lines] line_index=29, match=(450　万), text=(年収　450　万 東京都　　海外　　)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=53, match=(420 万), text=(420 万 300 万)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=53, match=(300 万), text=(420 万 300 万)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=54, match=(27 万), text=(月収 27 万 その他特記事項（転職理由や転職にあたっての条件等）)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=55, match=(0 万), text=(年間賞与 0 万 退職後は今後の日本社会のグローバル化を見据えてアメリカ留学をし、英語での基本的なコ)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=57, match=(324 万), text=(年収 324 万)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=59, match=(0 万), text=(残業手当 0 万)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=62, match=(0 万), text=(住宅手当 0 万 管理能力、飲食店時代で得たコミニュケーション能力、アメリカ留学で得た英語力を ぜひ活)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=64, match=(0 万), text=(扶養手当 0 万)
-Page:1, RedactedText:[mask near SALARY-lines] line_index=65, match=(0 万), text=(その他手当 0 万)
+Page:1, RedactedText:[mask money pattern] line=(年収 450 万 東京都  海外  ), matched=(450万)
+Page:1, RedactedText:[mask money pattern] line=(420 万 300 万), matched=(420万)
+Page:1, RedactedText:[mask money pattern] line=(420 万 300 万), matched=(300万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(月収 27 万 その他特記事項(転職理由や転職にあたっての条件等)) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(月収 27 万 その他特記事項(転職理由や転職にあたっての条件等)), matched=(27万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(年間賞与 0 万 退職後は今後の日本社会のグローバル化を見据えてアメリカ留学をし、英語での基本的なコ) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(年間賞与 0 万 退職後は今後の日本社会のグローバル化を見据えてアメリカ留学をし、英語での基本的なコ), matched=(0万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(年収 324 万) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(年収 324 万), matched=(324万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(残業手当 0 万) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(残業手当 0 万), matched=(0万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(住宅手当 0 万 管理能力、飲食店時代で得たコミニュケーション能力、アメリカ留学で得た英語力を ぜひ活) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(住宅手当 0 万 管理能力、飲食店時代で得たコミニュケーション能力、アメリカ留学で得た英語力を ぜひ活), matched=(0万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(扶養手当 0 万) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(扶養手当 0 万), matched=(0万)
+Page:1, RedactedText:[mask all digits in KW-line] line=(その他手当 0 万) => masked 1 numeric tokens
+Page:1, RedactedText:[mask money pattern] line=(その他手当 0 万), matched=(0万)
