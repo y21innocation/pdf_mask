@@ -4,6 +4,7 @@ import re
 import zipfile
 import tempfile
 import unicodedata
+import gc  # メモリ管理用
 from flask import Flask, render_template, request, send_from_directory
 import fitz  # PyMuPDF
 import pdfplumber
@@ -969,6 +970,9 @@ def upload():
             doc.save(out_pdf_path, deflate=True, clean=True)
             doc.close()
             plumber_pdf.close()
+            
+            # メモリクリーンアップ
+            gc.collect()
 
             # ログ出力
             out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
