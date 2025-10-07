@@ -619,6 +619,13 @@ def upload():
     if not files:
         return "No files uploaded", 400
 
+    # 複数ファイル処理のメモリ制約対応
+    memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
+    max_files = 1 if memory_tier == "starter" else 3  # Starterプランは1ファイルに制限
+    
+    if len(files) > max_files:
+        return f"Memory constraint: Maximum {max_files} files allowed per batch for {memory_tier} tier", 400
+
     # 既にマスク済みと思われるファイル名は拒否（テキストが除去済みのため再マスク不可）
     bad = [f.filename for f in files if _is_already_masked_filename(f.filename)]
     if bad:
@@ -635,19 +642,25 @@ def upload():
         output_pdfs = []
         log_files = []
 
-        for file_ in files:
-            # ファイル処理前にメモリクリーンアップ
-            gc.collect()
+        for file_index, file_ in enumerate(files):
+            print(f"[INFO] Processing file {file_index + 1}/{len(files)}: {file_.filename}")
             
-            in_pdf_path = os.path.join(tmpdir, file_.filename)
-            file_.save(in_pdf_path)
+            try:
+                # ファイル処理前にメモリクリーンアップ
+                gc.collect()
+                
+                in_pdf_path = os.path.join(tmpdir, file_.filename)
+                file_.save(in_pdf_path)
 
-            # PDFオープン
-            doc = fitz.open(in_pdf_path)
-            plumber_pdf = pdfplumber.open(in_pdf_path)
+                # PDFオープン
+                doc = fitz.open(in_pdf_path)
+                plumber_pdf = pdfplumber.open(in_pdf_path)
 
-            removed_items = []
-            for pindex in range(len(doc)):
+                removed_items = []
+                for pindex in range(len(doc)):
+                    # 定期的なメモリクリーンアップ（5ページ毎）
+                    if pindex % 5 == 0:
+                        gc.collect()
                 # 定期的なメモリクリーンアップ（5ページ毎）
                 if pindex % 5 == 0:
                     gc.collect()
@@ -989,31 +1002,44 @@ def upload():
                     mask_money_in_nearby_salary_lines(page, removed_items, pindex, page_text)
                 page.apply_redactions()
 
-            # 保存
-            out_pdf_name = f"maskedfix_{file_.filename}"
-            out_pdf_path = os.path.join('output', out_pdf_name)
-            doc.save(out_pdf_path, deflate=True, clean=True)
+                # 保存
+                out_pdf_name = f"maskedfix_{file_.filename}"
+                out_pdf_path = os.path.join('output', out_pdf_name)
+                doc.save(out_pdf_path, deflate=True, clean=True)
+                
+                # リソース解放とメモリクリーンアップ
+                doc.close()
+                plumber_pdf.close()
+                del doc, plumber_pdf  # 明示的削除
+                gc.collect()  # ガベージコレクション実行
+
+                # ログ出力
+                out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
+                out_log_path = os.path.join('output', out_log_name)
+                if removed_items:
+                    with open(out_log_path, "w", encoding="utf-8") as f:
+                        for (pg, txt) in removed_items:
+                            f.write(f"Page:{pg}, RedactedText:{txt}\n")
+                else:
+                    open(out_log_path, "w").close()
+
+                output_pdfs.append(out_pdf_path)
+                log_files.append(out_log_path)
+                
+            except Exception as e:
+                print(f"[ERROR] Failed to process file {file_.filename}: {e}")
+                # エラーファイルは処理をスキップして次へ
+                continue
+
+        # 処理結果がない場合のエラーハンドリング
+        if not output_pdfs:
+            return "No files were successfully processed", 500
             
-            # リソース解放とメモリクリーンアップ
-            doc.close()
-            plumber_pdf.close()
-            del doc, plumber_pdf  # 明示的削除
-            gc.collect()  # ガベージコレクション実行
+        # 単一ファイルの場合は直接返す（メモリ効率化）
+        if len(output_pdfs) == 1:
+            return send_from_directory('output', os.path.basename(output_pdfs[0]), as_attachment=True)
 
-            # ログ出力
-            out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
-            out_log_path = os.path.join('output', out_log_name)
-            if removed_items:
-                with open(out_log_path, "w", encoding="utf-8") as f:
-                    for (pg, txt) in removed_items:
-                        f.write(f"Page:{pg}, RedactedText:{txt}\n")
-            else:
-                open(out_log_path, "w").close()
-
-            output_pdfs.append(out_pdf_path)
-            log_files.append(out_log_path)
-
-        # ZIP圧縮
+        # 複数ファイルの場合はZIP圧縮
         zip_name = "maskedfix_and_texts.zip"
         zip_path = os.path.join('output', zip_name)
         with zipfile.ZipFile(zip_path, 'w') as zf:
