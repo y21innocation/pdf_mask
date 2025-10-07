@@ -5,6 +5,10 @@ import tempfile
 import unicodedata
 import gc  # メモリ管理用
 import time  # パフォーマンス測定用
+
+# Google AI SDK警告を抑制
+import warnings
+warnings.filterwarnings("ignore", message="All log messages before absl::InitializeLog")
 from flask import Flask, render_template, request, send_from_directory
 import fitz  # PyMuPDF
 import pdfplumber
@@ -997,6 +1001,16 @@ def upload():
         return send_from_directory('output', zip_name, as_attachment=True)
 
 if __name__=="__main__":
+    # メモリ効率化設定
+    import resource
+    try:
+        # メモリ使用量制限（Starter: 1.5GB、余裕を持たせる）
+        max_memory = int(os.getenv("MAX_MEMORY_MB", "1536")) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (max_memory, max_memory))
+        print(f"Memory limit set: {max_memory // (1024*1024)}MB")
+    except Exception as e:
+        print(f"Failed to set memory limit: {e}")
+    
     # AI設定をデバッグ出力
     print(f"Server AI_STRATEGY: {os.getenv('AI_STRATEGY', 'none')}")
     print(f"Server AI_MASK_LABELS: {os.getenv('AI_MASK_LABELS', '')}")

@@ -11,11 +11,12 @@ if memory_tier == "free":
     timeout = 120
     max_requests = 100
 elif memory_tier == "starter":
-    # Starter: 2GB
-    workers = 2
+    # Starter: 2GB - より保守的設定
+    workers = 1  # 1ワーカーに減らしてメモリ使用量を削減
     worker_class = "sync"
-    timeout = 180
-    max_requests = 200
+    timeout = 240  # タイムアウト延長
+    max_requests = 50  # リクエスト数削減
+    max_requests_jitter = 10
 else:
     # Pro以上: 4GB+
     workers = min(4, multiprocessing.cpu_count())
