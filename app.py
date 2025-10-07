@@ -90,8 +90,11 @@ EXCLUDE_KEYWORDS_PATTERN = re.compile(
 # 前後何行をマスク対象に含めるか
 NEAR_RANGE = 2
 
-# OCR設定
-OCR_ENABLED = os.environ.get("OCR_ENABLED", "false").lower() == "true"  # デフォルトで無効
+# OCR設定 - メモリ制約環境では無効化
+memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
+# Starterプランではメモリ不足を防ぐためOCRを無効化
+default_ocr_enabled = "false" if memory_tier == "starter" else "false"
+OCR_ENABLED = os.environ.get("OCR_ENABLED", default_ocr_enabled).lower() == "true"  # デフォルトで無効
 OCR_DPI = int(os.environ.get("OCR_DPI", "200"))
 OCR_MIN_CONFIDENCE = int(os.environ.get("OCR_MIN_CONFIDENCE", "30"))
 OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.7"))
@@ -102,7 +105,10 @@ OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.7"))
 MASK_STRATEGY = os.getenv("MASK_STRATEGY", "all").lower()  # デフォルトを "all" に変更
 FALLBACK_MASK_PAGE_IF_NONE = os.getenv("FALLBACK_MASK_PAGE_IF_NONE", "1") == "1"
 # AI戦略: none / ai / ai+rules
-AI_STRATEGY = os.getenv("AI_STRATEGY", "none").lower()
+# Starterプランではメモリ制約のためAI処理を無効化
+memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
+default_ai_strategy = "none" if memory_tier == "starter" else "none"
+AI_STRATEGY = os.getenv("AI_STRATEGY", default_ai_strategy).lower()
 AI_PROVIDER = os.getenv("AI_PROVIDER", "mock").lower()
 AI_PROMPT = os.getenv("AI_PROMPT", "Mask monetary amounts (金額, 年収, 月給, 円/万円/¥/￥).")
 AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
@@ -605,6 +611,12 @@ def upload():
     if not files:
         return "No files uploaded", 400
 
+    # Starterプランでのメモリ制約対応：同時処理ファイル数制限
+    memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
+    max_files = 1 if memory_tier == "starter" else 10
+    if len(files) > max_files:
+        return f"Memory tier '{memory_tier}': Maximum {max_files} files allowed per batch", 400
+
     # 既にマスク済みと思われるファイル名は拒否（テキストが除去済みのため再マスク不可）
     bad = [f.filename for f in files if _is_already_masked_filename(f.filename)]
     if bad:
@@ -622,6 +634,9 @@ def upload():
         log_files = []
 
         for file_ in files:
+            # 各ファイル処理前にメモリクリーンアップ
+            gc.collect()
+            
             in_pdf_path = os.path.join(tmpdir, file_.filename)
             file_.save(in_pdf_path)
 
@@ -631,6 +646,10 @@ def upload():
 
             removed_items = []
             for pindex in range(len(doc)):
+                # 各ページ処理前にもメモリクリーンアップ
+                if pindex % 5 == 0:  # 5ページ毎
+                    gc.collect()
+                    
                 page = doc[pindex]
                 pdfp_page = plumber_pdf.pages[pindex]
 
@@ -972,11 +991,12 @@ def upload():
             out_pdf_name = f"maskedfix_{file_.filename}"
             out_pdf_path = os.path.join('output', out_pdf_name)
             doc.save(out_pdf_path, deflate=True, clean=True)
+            
+            # リソース解放とメモリクリーンアップ
             doc.close()
             plumber_pdf.close()
-            
-            # メモリクリーンアップ
-            gc.collect()
+            del doc, plumber_pdf  # 明示的削除
+            gc.collect()  # ガベージコレクション実行
 
             # ログ出力
             out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
