@@ -132,7 +132,7 @@ ESCALATE_MASK_ALL_DIGITS_ON_ZERO = os.getenv("ESCALATE_MASK_ALL_DIGITS_ON_ZERO",
 OCR_IF_GARBLED = os.getenv("OCR_IF_GARBLED", "1") == "1"
 OCR_GARBLED_MIN_RATIO = float(os.getenv("OCR_GARBLED_MIN_RATIO", "0.35"))
 # 文字化けテキストの無差別マスキングを制御
-DISABLE_AGGRESSIVE_MASKING = os.getenv("DISABLE_AGGRESSIVE_MASKING", "1") == "1"  # デフォルトで無効化
+DISABLE_AGGRESSIVE_MASKING = os.getenv("DISABLE_AGGRESSIVE_MASKING", "0") == "1"  # デフォルトで有効化
 # OCR設定
 OCR_ENABLED = os.getenv("OCR_ENABLED", "1") == "1"
 OCR_DPI = int(os.getenv("OCR_DPI", "300"))
@@ -656,99 +656,96 @@ def upload():
                     # 定期的なメモリクリーンアップ（5ページ毎）
                     if pindex % 5 == 0:
                         gc.collect()
-                # 定期的なメモリクリーンアップ（5ページ毎）
-                if pindex % 5 == 0:
-                    gc.collect()
-                    
-                page = doc[pindex]
-                pdfp_page = plumber_pdf.pages[pindex]
+                        
+                    page = doc[pindex]
+                    pdfp_page = plumber_pdf.pages[pindex]
 
-                # --- デバッグ用ログ（テーブル行 / 非テーブル行） ---
-                print("[DEBUG] extract_table_rows_as_strings() called")
-                table_settings = {"vertical_strategy":"lines","horizontal_strategy":"lines"}
-                raw_table = pdfp_page.extract_table(table_settings=table_settings)
-                if raw_table:
-                    for i, row in enumerate(raw_table):
-                        if row:
-                            row_text = " ".join(cell.strip() for cell in row if cell)
-                            print(f"[DEBUG]  Table row {i}: {repr(row_text)}")
+                    # --- デバッグ用ログ（テーブル行 / 非テーブル行） ---
+                    print("[DEBUG] extract_table_rows_as_strings() called")
+                    table_settings = {"vertical_strategy":"lines","horizontal_strategy":"lines"}
+                    raw_table = pdfp_page.extract_table(table_settings=table_settings)
+                    if raw_table:
+                        for i, row in enumerate(raw_table):
+                            if row:
+                                row_text = " ".join(cell.strip() for cell in row if cell)
+                                print(f"[DEBUG]  Table row {i}: {repr(row_text)}")
 
-                print("[DEBUG] extract_non_table_text_as_lines() called")
-                full_text = pdfp_page.extract_text()
-                if full_text:
-                    lines_ = full_text.splitlines()
-                    for i, line_ in enumerate(lines_):
-                        line_ = normalize_and_remove_invisible_chars(line_.strip())
-                        if line_:
-                            print(f"[DEBUG]  Non-table line {i}: {repr(line_)}")
+                    print("[DEBUG] extract_non_table_text_as_lines() called")
+                    full_text = pdfp_page.extract_text()
+                    if full_text:
+                        lines_ = full_text.splitlines()
+                        for i, line_ in enumerate(lines_):
+                            line_ = normalize_and_remove_invisible_chars(line_.strip())
+                            if line_:
+                                print(f"[DEBUG]  Non-table line {i}: {repr(line_)}")
 
-                # --- マスキング ---
-                # まずOCR必要性を判定
-                use_ocr = False
-                if OCR_ENABLED and OCR_AVAILABLE:
-                    # pytesseractが利用可能かチェック
-                    try:
-                        import pytesseract
-                        # 簡単なテストを実行
-                        pytesseract.get_tesseract_version()
-                        tesseract_available = True
-                    except Exception as e:
-                        print(f"[DEBUG] Tesseract not available: {e}")
-                        tesseract_available = False
-                    
-                    if tesseract_available:
-                        # テキスト抽出可能性をチェック
-                        has_extractable_text = detect_text_regions(page)
-                        if not has_extractable_text:
-                            print(f"[DEBUG] Page {pindex+1} appears to be image-only, using OCR")
-                            use_ocr = True
-                        else:
-                            # テキスト品質をチェック
-                            try:
-                                page_text = pdfp_page.extract_text() or ""
-                            except Exception:
-                                page_text = ""
-                            if _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO:
-                                print(f"[DEBUG] Page {pindex+1} has poor text quality, using OCR")
+                    # --- マスキング ---
+                    # まずOCR必要性を判定
+                    use_ocr = False
+                    if OCR_ENABLED and OCR_AVAILABLE:
+                        # pytesseractが利用可能かチェック
+                        try:
+                            import pytesseract
+                            # 簡単なテストを実行
+                            pytesseract.get_tesseract_version()
+                            tesseract_available = True
+                        except Exception as e:
+                            print(f"[DEBUG] Tesseract not available: {e}")
+                            tesseract_available = False
+                        
+                        if tesseract_available:
+                            # テキスト抽出可能性をチェック
+                            has_extractable_text = detect_text_regions(page)
+                            if not has_extractable_text:
+                                print(f"[DEBUG] Page {pindex+1} appears to be image-only, using OCR")
                                 use_ocr = True
-                    else:
-                        print(f"[DEBUG] Tesseract not available, skipping OCR for page {pindex+1}")
+                            else:
+                                # テキスト品質をチェック
+                                try:
+                                    page_text = pdfp_page.extract_text() or ""
+                                except Exception:
+                                    page_text = ""
+                                if _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO:
+                                    print(f"[DEBUG] Page {pindex+1} has poor text quality, using OCR")
+                                    use_ocr = True
+                        else:
+                            print(f"[DEBUG] Tesseract not available, skipping OCR for page {pindex+1}")
 
-                # OCR処理
-                if use_ocr:
-                    print(f"[DEBUG] Processing page {pindex+1} with OCR")
-                    
-                    try:
-                        # OCRでテキスト抽出
-                        ocr_results = extract_text_with_ocr(page, dpi=OCR_DPI)
-                        print(f"[DEBUG] OCR extracted {len(ocr_results)} text regions")
+                    # OCR処理
+                    if use_ocr:
+                        print(f"[DEBUG] Processing page {pindex+1} with OCR")
                         
-                        # OCR結果を行にグループ化
-                        ocr_lines = group_ocr_words_into_lines(ocr_results)
-                        print(f"[DEBUG] OCR grouped into {len(ocr_lines)} lines")
-                        
-                        # OCRから年収パターンを検出
-                        salary_detections = ocr_detect_salary_patterns(ocr_lines)
-                        print(f"[DEBUG] OCR detected {len(salary_detections)} salary patterns")
-                        
-                        # OCR検出結果をマスキング
-                        for detection in salary_detections:
-                            bbox = detection['bbox']
-                            rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-                            page.add_redact_annot(rect, fill=(1,1,1))
+                        try:
+                            # OCRでテキスト抽出
+                            ocr_results = extract_text_with_ocr(page, dpi=OCR_DPI)
+                            print(f"[DEBUG] OCR extracted {len(ocr_results)} text regions")
                             
-                            removed_items.append(
-                                (pindex+1, f"[OCR salary] {detection['text']} in line: {detection['line_text']}")
-                            )
-                            print(f"[DEBUG] OCR MASKED: {detection['text']} at {bbox}")
-                        
-                        # OCR処理が完了したら通常処理をスキップ
-                        page.apply_redactions()
-                        continue
-                    except Exception as e:
-                        print(f"[DEBUG] OCR processing failed for page {pindex+1}: {e}")
-                        print(f"[DEBUG] Falling back to regular text processing")
-                        # OCR失敗時は通常処理に続行
+                            # OCR結果を行にグループ化
+                            ocr_lines = group_ocr_words_into_lines(ocr_results)
+                            print(f"[DEBUG] OCR grouped into {len(ocr_lines)} lines")
+                            
+                            # OCRから年収パターンを検出
+                            salary_detections = ocr_detect_salary_patterns(ocr_lines)
+                            print(f"[DEBUG] OCR detected {len(salary_detections)} salary patterns")
+                            
+                            # OCR検出結果をマスキング
+                            for detection in salary_detections:
+                                bbox = detection['bbox']
+                                rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+                                page.add_redact_annot(rect, fill=(1,1,1))
+                                
+                                removed_items.append(
+                                    (pindex+1, f"[OCR salary] {detection['text']} in line: {detection['line_text']}")
+                                )
+                                print(f"[DEBUG] OCR MASKED: {detection['text']} at {bbox}")
+                            
+                            # OCR処理が完了したら通常処理をスキップ
+                            page.apply_redactions()
+                            continue
+                        except Exception as e:
+                            print(f"[DEBUG] OCR processing failed for page {pindex+1}: {e}")
+                            print(f"[DEBUG] Falling back to regular text processing")
+                            # OCR失敗時は通常処理に続行
 
                 # AI優先（通常のテキスト処理）
                 print(f"[DEBUG] Checking AI_STRATEGY: {AI_STRATEGY}")
@@ -1026,8 +1023,22 @@ def upload():
                 
             except Exception as e:
                 print(f"[ERROR] Failed to process file {file_.filename}: {e}")
-                # エラーファイルは処理をスキップして次へ
-                continue
+                
+                # エラーファイルに対してもエラーログを作成
+                try:
+                    error_log_name = f"error_{os.path.splitext(file_.filename)[0]}.txt"
+                    error_log_path = os.path.join('output', error_log_name)
+                    with open(error_log_path, "w", encoding="utf-8") as f:
+                        f.write(f"Error processing file: {file_.filename}\n")
+                        f.write(f"Error details: {str(e)}\n")
+                        f.write(f"Timestamp: {gc.get_count()}\n")  # タイムスタンプの代わり
+                    
+                    log_files.append(error_log_path)
+                    print(f"[INFO] Created error log for {file_.filename}")
+                except Exception as log_error:
+                    print(f"[ERROR] Could not create error log for {file_.filename}: {log_error}")
+                
+                # エラーでもcontinueして次のファイルへ
 
         # 処理結果がない場合のエラーハンドリング
         if not output_pdfs:
