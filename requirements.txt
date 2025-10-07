@@ -6,3 +6,8 @@ pdf2image
 gunicorn
 Pillow
 PyMuPDF
+google-generativeai
+pytesseract
+numpy
+opencv-python
+easyocr
