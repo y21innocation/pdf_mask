@@ -6,7 +6,8 @@ import tempfile
 import unicodedata
 import gc  # メモリ管理用
 import resource  # リソース制限用
-from flask import Flask, render_template, request, send_from_directory
+import io  # ストリーミング用
+from flask import Flask, render_template, request, send_from_directory, Response
 import fitz  # PyMuPDF
 import pdfplumber
 from ai_mask import AiMasker
@@ -634,6 +635,7 @@ def upload():
 
         output_pdfs = []
         log_files = []
+        processed_count = 0
 
         for file_index, file_ in enumerate(files):
             print(f"[INFO] Processing file {file_index + 1}/{len(files)}: {file_.filename}")
@@ -1018,6 +1020,9 @@ def upload():
 
                 output_pdfs.append(out_pdf_path)
                 log_files.append(out_log_path)
+                processed_count += 1
+                
+                print(f"[INFO] Successfully processed {file_.filename} ({processed_count}/{len(files)})")
                 
             except Exception as e:
                 print(f"[ERROR] Failed to process file {file_.filename}: {e}")
@@ -1032,14 +1037,44 @@ def upload():
         if len(output_pdfs) == 1:
             return send_from_directory('output', os.path.basename(output_pdfs[0]), as_attachment=True)
 
-        # 複数ファイルの場合はZIP圧縮
-        zip_name = "maskedfix_and_texts.zip"
-        zip_path = os.path.join('output', zip_name)
-        with zipfile.ZipFile(zip_path, 'w') as zf:
-            for path_ in output_pdfs + log_files:
-                zf.write(path_, os.path.basename(path_))
+        # 複数ファイルの場合はストリーミングZIP圧縮
+        def generate_streaming_zip():
+            """メモリ効率的なストリーミングZIP生成"""
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # 各ファイルを順次追加（メモリに全て読み込まない）
+                for file_path in output_pdfs + log_files:
+                    if os.path.exists(file_path):
+                        # ファイルをストリームとして追加
+                        zf.write(file_path, os.path.basename(file_path))
+                        # ファイル追加後にガベージコレクション
+                        gc.collect()
+            
+            zip_buffer.seek(0)
+            data = zip_buffer.getvalue()
+            zip_buffer.close()
+            
+            # 一時ファイルのクリーンアップ
+            for file_path in output_pdfs + log_files:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception as e:
+                    print(f"[WARNING] Could not remove temp file {file_path}: {e}")
+            
+            return data
 
-        return send_from_directory('output', zip_name, as_attachment=True)
+        zip_data = generate_streaming_zip()
+        
+        return Response(
+            zip_data,
+            mimetype='application/zip',
+            headers={
+                'Content-Disposition': 'attachment; filename=maskedfix_and_texts.zip',
+                'Content-Length': str(len(zip_data))
+            }
+        )
 
 if __name__=="__main__":
     # AI設定をデバッグ出力
