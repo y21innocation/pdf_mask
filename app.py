@@ -619,13 +619,6 @@ def upload():
     if not files:
         return "No files uploaded", 400
 
-    # 複数ファイル処理のメモリ制約対応
-    memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
-    max_files = 1 if memory_tier == "starter" else 3  # Starterプランは1ファイルに制限
-    
-    if len(files) > max_files:
-        return f"Memory constraint: Maximum {max_files} files allowed per batch for {memory_tier} tier", 400
-
     # 既にマスク済みと思われるファイル名は拒否（テキストが除去済みのため再マスク不可）
     bad = [f.filename for f in files if _is_already_masked_filename(f.filename)]
     if bad:
