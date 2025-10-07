@@ -1,18 +1,25 @@
+# -*- coding: utf-8 -*-
 import os
 import re
 import zipfile
 import tempfile
 import unicodedata
 import gc  # メモリ管理用
-import time  # パフォーマンス測定用
-
-# Google AI SDK警告を抑制
-import warnings
-warnings.filterwarnings("ignore", message="All log messages before absl::InitializeLog")
+import resource  # リソース制限用
 from flask import Flask, render_template, request, send_from_directory
 import fitz  # PyMuPDF
 import pdfplumber
 from ai_mask import AiMasker
+
+# メモリ制限設定（Starterプラン対応）
+try:
+    # メモリ使用量上限を1.5GBに設定
+    memory_limit = 1.5 * 1024 * 1024 * 1024  # 1.5GB in bytes
+    resource.setrlimit(resource.RLIMIT_AS, (int(memory_limit), int(memory_limit)))
+    print(f"[INFO] Memory limit set to {memory_limit/1024/1024/1024:.1f}GB")
+except Exception as e:
+    print(f"[WARNING] Could not set memory limit: {e}")
+
 try:
     import pytesseract
 except Exception:
@@ -32,6 +39,13 @@ except ImportError as e:
     OCR_AVAILABLE = False
 
 app = Flask(__name__)
+
+# ファイルサイズ制限（メモリ制約対応）
+memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
+if memory_tier == "starter":
+    app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB
+else:
+    app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
 
 def _is_already_masked_filename(name: str) -> bool:
     base = os.path.basename(name or "")
@@ -90,11 +104,8 @@ EXCLUDE_KEYWORDS_PATTERN = re.compile(
 # 前後何行をマスク対象に含めるか
 NEAR_RANGE = 2
 
-# OCR設定 - メモリ制約環境では無効化
-memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
-# Starterプランではメモリ不足を防ぐためOCRを無効化
-default_ocr_enabled = "false" if memory_tier == "starter" else "false"
-OCR_ENABLED = os.environ.get("OCR_ENABLED", default_ocr_enabled).lower() == "true"  # デフォルトで無効
+# OCR設定
+OCR_ENABLED = os.environ.get("OCR_ENABLED", "false").lower() == "true"  # デフォルトで無効
 OCR_DPI = int(os.environ.get("OCR_DPI", "200"))
 OCR_MIN_CONFIDENCE = int(os.environ.get("OCR_MIN_CONFIDENCE", "30"))
 OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.7"))
@@ -105,10 +116,7 @@ OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.7"))
 MASK_STRATEGY = os.getenv("MASK_STRATEGY", "all").lower()  # デフォルトを "all" に変更
 FALLBACK_MASK_PAGE_IF_NONE = os.getenv("FALLBACK_MASK_PAGE_IF_NONE", "1") == "1"
 # AI戦略: none / ai / ai+rules
-# Starterプランではメモリ制約のためAI処理を無効化
-memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
-default_ai_strategy = "none" if memory_tier == "starter" else "none"
-AI_STRATEGY = os.getenv("AI_STRATEGY", default_ai_strategy).lower()
+AI_STRATEGY = os.getenv("AI_STRATEGY", "none").lower()
 AI_PROVIDER = os.getenv("AI_PROVIDER", "mock").lower()
 AI_PROMPT = os.getenv("AI_PROMPT", "Mask monetary amounts (金額, 年収, 月給, 円/万円/¥/￥).")
 AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
@@ -611,12 +619,6 @@ def upload():
     if not files:
         return "No files uploaded", 400
 
-    # Starterプランでのメモリ制約対応：同時処理ファイル数制限
-    memory_tier = os.getenv("MEMORY_TIER", "starter").lower()
-    max_files = 1 if memory_tier == "starter" else 10
-    if len(files) > max_files:
-        return f"Memory tier '{memory_tier}': Maximum {max_files} files allowed per batch", 400
-
     # 既にマスク済みと思われるファイル名は拒否（テキストが除去済みのため再マスク不可）
     bad = [f.filename for f in files if _is_already_masked_filename(f.filename)]
     if bad:
@@ -634,7 +636,7 @@ def upload():
         log_files = []
 
         for file_ in files:
-            # 各ファイル処理前にメモリクリーンアップ
+            # ファイル処理前にメモリクリーンアップ
             gc.collect()
             
             in_pdf_path = os.path.join(tmpdir, file_.filename)
@@ -646,8 +648,8 @@ def upload():
 
             removed_items = []
             for pindex in range(len(doc)):
-                # 各ページ処理前にもメモリクリーンアップ
-                if pindex % 5 == 0:  # 5ページ毎
+                # 定期的なメモリクリーンアップ（5ページ毎）
+                if pindex % 5 == 0:
                     gc.collect()
                     
                 page = doc[pindex]
@@ -1021,16 +1023,6 @@ def upload():
         return send_from_directory('output', zip_name, as_attachment=True)
 
 if __name__=="__main__":
-    # メモリ効率化設定
-    import resource
-    try:
-        # メモリ使用量制限（Starter: 1.5GB、余裕を持たせる）
-        max_memory = int(os.getenv("MAX_MEMORY_MB", "1536")) * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (max_memory, max_memory))
-        print(f"Memory limit set: {max_memory // (1024*1024)}MB")
-    except Exception as e:
-        print(f"Failed to set memory limit: {e}")
-    
     # AI設定をデバッグ出力
     print(f"Server AI_STRATEGY: {os.getenv('AI_STRATEGY', 'none')}")
     print(f"Server AI_MASK_LABELS: {os.getenv('AI_MASK_LABELS', '')}")

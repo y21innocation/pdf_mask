@@ -3,4 +3,4 @@ services:
     name: pdf-edit
     env: python
     buildCommand: ./render-build.sh && pip install -r requirements.txt
-    startCommand: gunicorn app:app --config gunicorn.conf.py
+    startCommand: gunicorn app:app
