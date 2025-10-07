@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 import os
 import re
 import zipfile
 import tempfile
 import unicodedata
 import gc  # メモリ管理用
+import time  # パフォーマンス測定用
 from flask import Flask, render_template, request, send_from_directory
 import fitz  # PyMuPDF
 import pdfplumber
