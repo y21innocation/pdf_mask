@@ -7,6 +7,7 @@ import unicodedata
 import gc  # メモリ管理用
 import resource  # リソース制限用
 import io  # ストリーミング用
+import shutil  # フォールバックコピー用
 from flask import Flask, render_template, request, send_from_directory, Response
 import fitz  # PyMuPDF
 import pdfplumber
@@ -105,17 +106,17 @@ EXCLUDE_KEYWORDS_PATTERN = re.compile(
 # 前後何行をマスク対象に含めるか
 NEAR_RANGE = 2
 
-# OCR設定
-OCR_ENABLED = os.environ.get("OCR_ENABLED", "false").lower() == "true"  # デフォルトで無効
-OCR_DPI = int(os.environ.get("OCR_DPI", "200"))
+# OCR設定（保守的デフォルト: 無効）
+OCR_ENABLED = os.environ.get("OCR_ENABLED", "false").lower() == "true"  # デフォルト無効
+OCR_DPI = int(os.environ.get("OCR_DPI", "300"))
 OCR_MIN_CONFIDENCE = int(os.environ.get("OCR_MIN_CONFIDENCE", "30"))
-OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.7"))
+OCR_GARBLED_MIN_RATIO = float(os.environ.get("OCR_GARBLED_MIN_RATIO", "0.35"))
 
 # マスキング戦略
-# MASK_STRATEGY: "near"(従来の近傍マスク) / "all"(ページ全体の金額をマスク)
-# FALLBACK_MASK_PAGE_IF_NONE: 近傍マスクでヒットがゼロだったページに対して金額の全体マスクをフォールバック実行
-MASK_STRATEGY = os.getenv("MASK_STRATEGY", "all").lower()  # デフォルトを "all" に変更
-FALLBACK_MASK_PAGE_IF_NONE = os.getenv("FALLBACK_MASK_PAGE_IF_NONE", "1") == "1"
+# MASK_STRATEGY: "near"(近傍マスク) / "all"(ページ全体の金額をマスク)
+MASK_STRATEGY = os.getenv("MASK_STRATEGY", "near").lower()  # デフォルトを安全側の"near"に
+# 近傍マスクでヒット0のときページ全体へ拡張するフォールバック（デフォルト無効）
+FALLBACK_MASK_PAGE_IF_NONE = os.getenv("FALLBACK_MASK_PAGE_IF_NONE", "0") == "1"
 # AI戦略: none / ai / ai+rules
 AI_STRATEGY = os.getenv("AI_STRATEGY", "none").lower()
 AI_PROVIDER = os.getenv("AI_PROVIDER", "mock").lower()
@@ -125,18 +126,31 @@ AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
 AI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 AI_MASK_LABELS = os.getenv("AI_MASK_LABELS")  # e.g., "annual_income,monthly_income,bonus"
 AI_FALLBACK_TO_RULES_ON_ZERO = os.getenv("AI_FALLBACK_TO_RULES_ON_ZERO", "1") == "1"
-ADJACENT_MASK_ALL_DIGITS = os.getenv("ADJACENT_MASK_ALL_DIGITS", "1") == "1"
-FALLBACK_STRONG_NUMBER_MASK = os.getenv("FALLBACK_STRONG_NUMBER_MASK", "1") == "1"
+# キーワード行でのマスク挙動: money-only / all-digits（デフォルトは金額のみ）
+KW_LINE_MASK_MODE = os.getenv("KW_LINE_MASK_MODE", "money-only").lower()
+# 近傍行での全数字マスク（安全のためデフォルト無効）
+ADJACENT_MASK_ALL_DIGITS = os.getenv("ADJACENT_MASK_ALL_DIGITS", "0") == "1"
+# 強い数値（5桁以上/カンマ区切り）フォールバック（デフォルト無効）
+FALLBACK_STRONG_NUMBER_MASK = os.getenv("FALLBACK_STRONG_NUMBER_MASK", "0") == "1"
+# 数値と単位の近接ペアは有用なので維持（デフォルト有効）
 FALLBACK_PAIR_NUM_UNIT = os.getenv("FALLBACK_PAIR_NUM_UNIT", "1") == "1"
-ESCALATE_MASK_ALL_DIGITS_ON_ZERO = os.getenv("ESCALATE_MASK_ALL_DIGITS_ON_ZERO", "1") == "1"  # デフォルトを有効化
+# 何もヒットしないときの全数字マスクエスカレーション（デフォルト無効）
+ESCALATE_MASK_ALL_DIGITS_ON_ZERO = os.getenv("ESCALATE_MASK_ALL_DIGITS_ON_ZERO", "0") == "1"
 OCR_IF_GARBLED = os.getenv("OCR_IF_GARBLED", "1") == "1"
-OCR_GARBLED_MIN_RATIO = float(os.getenv("OCR_GARBLED_MIN_RATIO", "0.35"))
-# 文字化けテキストの無差別マスキングを制御
-DISABLE_AGGRESSIVE_MASKING = os.getenv("DISABLE_AGGRESSIVE_MASKING", "0") == "1"  # デフォルトで有効化
-# OCR設定
-OCR_ENABLED = os.getenv("OCR_ENABLED", "1") == "1"
-OCR_DPI = int(os.getenv("OCR_DPI", "300"))
-OCR_MIN_CONFIDENCE = int(os.getenv("OCR_MIN_CONFIDENCE", "30"))
+# 文字化けテキストの無差別マスキングはデフォルトで無効にする
+DISABLE_AGGRESSIVE_MASKING = os.getenv("DISABLE_AGGRESSIVE_MASKING", "1") == "1"
+
+# ページ上部（ヘッダ）にある金額も確実にマスクするための設定
+ALWAYS_MASK_HEADER_MONEY = os.getenv("ALWAYS_MASK_HEADER_MONEY", "1") == "1"
+HEADER_MONEY_MASK_TOP_RATIO = float(os.getenv("HEADER_MONEY_MASK_TOP_RATIO", "0.12"))  # ページ高さに対する割合
+HEADER_MONEY_ONLY_ON_FIRST_PAGE = os.getenv("HEADER_MONEY_ONLY_ON_FIRST_PAGE", "1") == "1"
+# 先頭N行にも金額パターンを適用（比率判定をすり抜けた大きめフォント見出し対策）
+HEADER_TOP_N_LINES = int(os.getenv("HEADER_TOP_N_LINES", "4"))
+
+# OCR設定（再定義を避け、上のデフォルトを尊重）
+OCR_ENABLED = os.getenv("OCR_ENABLED", "0") == "1"
+OCR_DPI = int(os.getenv("OCR_DPI", str(OCR_DPI)))
+OCR_MIN_CONFIDENCE = int(os.getenv("OCR_MIN_CONFIDENCE", str(OCR_MIN_CONFIDENCE)))
 
 # 強い数値トークン判定（単位がなくても「金額っぽい」）
 STRONG_NUMBER_TOKEN_RE = re.compile(r"^(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{5,})$")
@@ -544,6 +558,60 @@ def mask_money_in_nearby_salary_lines(page, removed_items, page_idx, page_text: 
             mask_line_money_pattern(page, ln, removed_items, page_idx)
         return
 
+    # ページ上部（ヘッダ領域）に対しては、キーワードに関係なく金額パターンを適用（既定: 1ページ目のみ）
+    if ALWAYS_MASK_HEADER_MONEY:
+        try:
+            header_y = page.rect.y0 + page.rect.height * max(0.0, min(HEADER_MONEY_MASK_TOP_RATIO, 0.5))
+            if (not HEADER_MONEY_ONLY_ON_FIRST_PAGE) or (page_idx == 0):
+                # 1) 比率ベース（通常のwords由来の行）
+                for ln in lines:
+                    ln_y = ln.get('y')
+                    if ln_y is None:
+                        try:
+                            ln_y = sum((t[1]+t[3])/2.0 for t in ln['tokens'])/max(1, len(ln['tokens']))
+                        except Exception:
+                            ln_y = header_y + 1  # フォールバック: ヘッダ外とみなす
+                    if ln_y <= header_y:
+                        mask_line_money_pattern(page, ln, removed_items, page_idx)
+
+                # 2) 先頭N行ベース（y昇順）
+                if HEADER_TOP_N_LINES > 0:
+                    try:
+                        sorted_lines = sorted(lines, key=lambda l: l.get('y', 1e9))
+                    except Exception:
+                        sorted_lines = lines
+                    for ln in sorted_lines[:HEADER_TOP_N_LINES]:
+                        mask_line_money_pattern(page, ln, removed_items, page_idx)
+
+                # 3) OCR行でもヘッダ領域を金額パターン適用（wordsで拾えないType3フォント対策）
+                try:
+                    if 'pytesseract' in globals() and pytesseract is not None:
+                        ocr_lines = ocr_extract_lines(page)
+                        if ocr_lines:
+                            # 比率ベース + 先頭N行ベースの両方で適用
+                            # a) 比率ベース
+                            for ln in ocr_lines:
+                                ln_y = ln.get('y')
+                                if ln_y is None:
+                                    try:
+                                        ln_y = sum((t[1]+t[3])/2.0 for t in ln['tokens'])/max(1, len(ln['tokens']))
+                                    except Exception:
+                                        ln_y = header_y + 1
+                                if ln_y <= header_y:
+                                    mask_line_money_pattern(page, ln, removed_items, page_idx)
+                            # b) 先頭N行
+                            if HEADER_TOP_N_LINES > 0:
+                                try:
+                                    sorted_ocr = sorted(ocr_lines, key=lambda l: l.get('y', 1e9))
+                                except Exception:
+                                    sorted_ocr = ocr_lines
+                                for ln in sorted_ocr[:HEADER_TOP_N_LINES]:
+                                    mask_line_money_pattern(page, ln, removed_items, page_idx)
+                except Exception as e:
+                    print(f"[DEBUG] OCR header money masking skipped due to error: {e}")
+        except Exception as e:
+            print(f"[DEBUG] Header money masking skipped due to error: {e}")
+
     # キーワード含む行indexを抽出
     kw_line_idxs = set()
     for ln in lines:
@@ -563,9 +631,14 @@ def mask_money_in_nearby_salary_lines(page, removed_items, page_idx, page_text: 
         original_line_idx = ln['line_index']
 
         if original_line_idx in kw_line_idxs:
-            # (A) キーワード行 => 1)数字全部マスク、2)money_patternマスク
-            mask_line_all_numbers(page, ln, removed_items, page_idx)
-            mask_line_money_pattern(page, ln, removed_items, page_idx)
+            # (A) キーワード行
+            if KW_LINE_MASK_MODE == "all-digits":
+                # 互換モード: 1)数字全部マスク、2)money_patternマスク
+                mask_line_all_numbers(page, ln, removed_items, page_idx)
+                mask_line_money_pattern(page, ln, removed_items, page_idx)
+            else:
+                # デフォルト: 金額パターンのみ
+                mask_line_money_pattern(page, ln, removed_items, page_idx)
 
         elif original_line_idx in target_line_idxs:
             # (B) 前後N行 => money_patternのみ
@@ -639,11 +712,17 @@ def upload():
 
         for file_index, file_ in enumerate(files):
             print(f"[INFO] Processing file {file_index + 1}/{len(files)}: {file_.filename}")
-            
+            prev_out_count = len(output_pdfs)
+
+            doc = None
+            plumber_pdf = None
+            in_pdf_path = None
+            removed_items = []
+
             try:
                 # ファイル処理前にメモリクリーンアップ
                 gc.collect()
-                
+
                 in_pdf_path = os.path.join(tmpdir, file_.filename)
                 file_.save(in_pdf_path)
 
@@ -656,13 +735,13 @@ def upload():
                     # 定期的なメモリクリーンアップ（5ページ毎）
                     if pindex % 5 == 0:
                         gc.collect()
-                        
+
                     page = doc[pindex]
                     pdfp_page = plumber_pdf.pages[pindex]
 
                     # --- デバッグ用ログ（テーブル行 / 非テーブル行） ---
                     print("[DEBUG] extract_table_rows_as_strings() called")
-                    table_settings = {"vertical_strategy":"lines","horizontal_strategy":"lines"}
+                    table_settings = {"vertical_strategy": "lines", "horizontal_strategy": "lines"}
                     raw_table = pdfp_page.extract_table(table_settings=table_settings)
                     if raw_table:
                         for i, row in enumerate(raw_table):
@@ -692,7 +771,7 @@ def upload():
                         except Exception as e:
                             print(f"[DEBUG] Tesseract not available: {e}")
                             tesseract_available = False
-                        
+
                         if tesseract_available:
                             # テキスト抽出可能性をチェック
                             has_extractable_text = detect_text_regions(page)
@@ -714,298 +793,304 @@ def upload():
                     # OCR処理
                     if use_ocr:
                         print(f"[DEBUG] Processing page {pindex+1} with OCR")
-                        
                         try:
                             # OCRでテキスト抽出
                             ocr_results = extract_text_with_ocr(page, dpi=OCR_DPI)
                             print(f"[DEBUG] OCR extracted {len(ocr_results)} text regions")
-                            
+
                             # OCR結果を行にグループ化
                             ocr_lines = group_ocr_words_into_lines(ocr_results)
                             print(f"[DEBUG] OCR grouped into {len(ocr_lines)} lines")
-                            
+
                             # OCRから年収パターンを検出
                             salary_detections = ocr_detect_salary_patterns(ocr_lines)
                             print(f"[DEBUG] OCR detected {len(salary_detections)} salary patterns")
-                            
+
                             # OCR検出結果をマスキング
                             for detection in salary_detections:
                                 bbox = detection['bbox']
                                 rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-                                page.add_redact_annot(rect, fill=(1,1,1))
-                                
+                                page.add_redact_annot(rect, fill=(1, 1, 1))
+
                                 removed_items.append(
-                                    (pindex+1, f"[OCR salary] {detection['text']} in line: {detection['line_text']}")
+                                    (pindex + 1, f"[OCR salary] {detection['text']} in line: {detection['line_text']}")
                                 )
                                 print(f"[DEBUG] OCR MASKED: {detection['text']} at {bbox}")
-                            
-                            # OCR処理が完了したら通常処理をスキップ
-                            page.apply_redactions()
-                            continue
+
+                            # OCRでヒットがある場合のみここで確定しスキップ、0なら以降のAI/ルールへフォールバック
+                            if len(salary_detections) > 0:
+                                page.apply_redactions()
+                                print(f"[DEBUG] OCR had hits on page {pindex+1}; skipping further processing")
+                                continue
+                            else:
+                                print(f"[DEBUG] OCR had 0 hits on page {pindex+1}; falling back to AI/rules")
                         except Exception as e:
                             print(f"[DEBUG] OCR processing failed for page {pindex+1}: {e}")
                             print(f"[DEBUG] Falling back to regular text processing")
                             # OCR失敗時は通常処理に続行
 
-                # AI優先（通常のテキスト処理）
-                print(f"[DEBUG] Checking AI_STRATEGY: {AI_STRATEGY}")
-                if AI_STRATEGY in ("ai", "ai+rules"):
-                    print(f"[DEBUG] AI masking enabled on page {pindex+1}")
-                    lines = group_words_into_lines(page)
-                    print(f"[DEBUG] Extracted {len(lines)} lines from page {pindex+1}")
-                    
-                    # Check for corrupted text and force OCR if detected
-                    force_ocr = False
-                    if lines:
-                        for line in lines:
-                            line_text = line.get('text', '')
-                            if _is_corrupted_text(line_text):
-                                print(f"[DEBUG] Corrupted text detected on page {pindex+1}: {repr(line_text[:50])}")
-                                force_ocr = True
-                                break
-                    
-                    # 文字化けや未抽出時はOCRへ
-                    if OCR_IF_GARBLED or force_ocr:
-                        try:
-                            page_text = pdfp_page.extract_text() or ""
-                        except Exception:
-                            page_text = ""
-                        if _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO or force_ocr:
+                    # AI優先（通常のテキスト処理）
+                    print(f"[DEBUG] Checking AI_STRATEGY: {AI_STRATEGY}")
+                    if AI_STRATEGY in ("ai", "ai+rules"):
+                        print(f"[DEBUG] AI masking enabled on page {pindex+1}")
+                        lines = group_words_into_lines(page)
+                        print(f"[DEBUG] Extracted {len(lines)} lines from page {pindex+1}")
+
+                        # Check for corrupted text and force OCR if detected
+                        force_ocr = False
+                        if lines:
+                            for line in lines:
+                                line_text = line.get('text', '')
+                                if _is_corrupted_text(line_text):
+                                    print(f"[DEBUG] Corrupted text detected on page {pindex+1}: {repr(line_text[:50])}")
+                                    force_ocr = True
+                                    break
+
+                        # 文字化けや未抽出時はOCRへ
+                        if OCR_IF_GARBLED or force_ocr:
+                            try:
+                                page_text = pdfp_page.extract_text() or ""
+                            except Exception:
+                                page_text = ""
+                            if _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO or force_ocr:
+                                ocr_lines = ocr_extract_lines(page)
+                                if ocr_lines:
+                                    print(f"[DEBUG] Low quality text on page {pindex+1} -> Using OCR lines (AI path)")
+                                    # Convert OCR lines to the format expected by AI masking
+                                    lines = []
+                                    for ocr_line in ocr_lines:
+                                        # Create a line structure similar to group_words_into_lines output
+                                        lines.append({
+                                            'text': ocr_line.get('text', ''),
+                                            'tokens': ocr_line.get('tokens', []),  # Use OCR token positions when available
+                                            'bbox': [0, 0, 0, 0]  # Default bbox
+                                        })
+                        if not lines:  # 画像のみ等でwordsが拾えない場合はOCRにフォールバック
                             ocr_lines = ocr_extract_lines(page)
                             if ocr_lines:
-                                print(f"[DEBUG] Low quality text on page {pindex+1} -> Using OCR lines (AI path)")
-                                # Convert OCR lines to the format expected by AI masking
+                                print(f"[DEBUG] Using OCR lines on page {pindex+1}")
                                 lines = []
                                 for ocr_line in ocr_lines:
-                                    # Create a line structure similar to group_words_into_lines output
                                     lines.append({
-                                        'text': ocr_line,
-                                        'tokens': [],  # OCR doesn't provide token positions
-                                        'bbox': [0, 0, 0, 0]  # Default bbox
+                                        'text': ocr_line.get('text', ''),
+                                        'tokens': ocr_line.get('tokens', []),
+                                        'bbox': [0, 0, 0, 0]
                                     })
-                    if not lines:  # 画像のみ等でwordsが拾えない場合はOCRにフォールバック
-                        ocr_lines = ocr_extract_lines(page)
-                        if ocr_lines:
-                            print(f"[DEBUG] Using OCR lines on page {pindex+1}")
-                            lines = []
-                            for ocr_line in ocr_lines:
-                                lines.append({
-                                    'text': ocr_line,
-                                    'tokens': [],
-                                    'bbox': [0, 0, 0, 0]
-                                })
-                    mask_labels = None
-                    if AI_MASK_LABELS:
-                        mask_labels = {s.strip() for s in AI_MASK_LABELS.split(',') if s.strip()}
-                        print(f"[DEBUG] AI mask labels: {mask_labels}")
-                    else:
-                        print(f"[DEBUG] No AI mask labels configured")
-                    print(f"[DEBUG] Creating AiMasker with provider={AI_PROVIDER}")
-                    ai = AiMasker(provider=AI_PROVIDER, prompt=AI_PROMPT, api_key=AI_API_KEY, model=AI_MODEL, mask_labels=mask_labels)
-                    print(f"[DEBUG] Running AI masking on page {pindex+1} with {len(lines)} lines")
-                    rects, ai_logs = ai.mask_page(lines, pindex)
-                    print(f"[DEBUG] AI masking found {len(rects)} rectangles and {len(ai_logs)} log entries")
-                    for r in rects:
-                        page.add_redact_annot(r, fill=(1,1,1))
-                    removed_items.extend(ai_logs)
-                    if AI_STRATEGY == "ai":
-                        # AIのみモード: ヒット0ならルールベースへ自動フォールバック（環境変数で無効化可）
-                        if len(rects) == 0 and AI_FALLBACK_TO_RULES_ON_ZERO:
-                            print(f"[DEBUG] AI had 0 hits on page {pindex+1}. Fallback to rule-based masking.")
+                        mask_labels = None
+                        if AI_MASK_LABELS:
+                            mask_labels = {s.strip() for s in AI_MASK_LABELS.split(',') if s.strip()}
+                            print(f"[DEBUG] AI mask labels: {mask_labels}")
                         else:
+                            print(f"[DEBUG] No AI mask labels configured")
+                        print(f"[DEBUG] Creating AiMasker with provider={AI_PROVIDER}")
+                        ai = AiMasker(provider=AI_PROVIDER, prompt=AI_PROMPT, api_key=AI_API_KEY, model=AI_MODEL, mask_labels=mask_labels)
+                        print(f"[DEBUG] Running AI masking on page {pindex+1} with {len(lines)} lines")
+                        rects, ai_logs = ai.mask_page(lines, pindex)
+                        print(f"[DEBUG] AI masking found {len(rects)} rectangles and {len(ai_logs)} log entries")
+                        for r in rects:
+                            page.add_redact_annot(r, fill=(1, 1, 1))
+                        removed_items.extend(ai_logs)
+                        if AI_STRATEGY == "ai":
+                            # AIのみモード: ヒット0ならルールベースへ自動フォールバック（環境変数で無効化可）
+                            if len(rects) == 0 and AI_FALLBACK_TO_RULES_ON_ZERO:
+                                print(f"[DEBUG] AI had 0 hits on page {pindex+1}. Fallback to rule-based masking.")
+                            else:
+                                page.apply_redactions()
+                                continue
+
+                    # 通常のテキスト処理のためのテキスト取得
+                    try:
+                        page_text = pdfp_page.extract_text() or ""
+                    except Exception:
+                        page_text = ""
+
+                    # 文字化けページ向けの積極的マスキング（AI処理後のフォールバック）
+                    # 誤検出抑制のため、
+                    # 1) 環境フラグ DISABLE_AGGRESSIVE_MASKING が有効ならスキップ
+                    # 2) 閾値は OCR_GARBLED_MIN_RATIO を使用（既定0.35）
+                    # 3) 給与系キーワードが含まれる行のみ対象（"年" 単独などで誤検出しない）
+                    text_quality = _text_quality_ratio(page_text)
+                    if (not DISABLE_AGGRESSIVE_MASKING) and (text_quality < OCR_GARBLED_MIN_RATIO):
+                        print(f"[DEBUG] Low quality text on page {pindex+1} (quality: {text_quality:.2f}) -> Using aggressive masking")
+
+                        # まず通常のlines処理を実行してlinesを定義
+                        try:
+                            # ページの全テキストをトークンで行にグループ化（正しい引数で呼び出し）
+                            lines = group_words_into_lines(page, NEAR_RANGE)
+                        except Exception as e:
+                            print(f"[DEBUG] Error in line processing: {e}")
+                            lines = []
+                            # エラーの場合は別の方法で処理
+                            try:
+                                # 代替方法: pdfplumberからテキストを取得
+                                page_text = pdfp_page.extract_text() or ""
+                                # 簡単な行分割でダミーのlinesを作成（group_words_into_lines形式に合わせる）
+                                text_lines = page_text.split('\n')
+                                lines = []
+                                for i, line_text in enumerate(text_lines):
+                                    if line_text.strip():
+                                        # group_words_into_lines()の戻り値形式に合わせる
+                                        lines.append({
+                                            'line_index': i,
+                                            'tokens': [(0, i * 20, 595, (i + 1) * 20, line_text.strip())],  # (x0,y0,x1,y1,text)形式
+                                            'y': i * 20,
+                                            'text': line_text.strip()
+                                        })
+                            except Exception as e2:
+                                print(f"[DEBUG] Alternative line processing also failed: {e2}")
+                                lines = []
+
+                        # 文字化けテキストからも金額パターンを検出
+                        garbled_money_patterns = [
+                            r'[0-9０-９][0-9０-９,\.\s]*\s*(?:万\s*円|万円|円|¥|￥|万)',
+                            r'[0-9０-９]+\s*(?:万|円)',
+                            r'¥\s*[0-9０-９]+',
+                            r'[0-9０-９]+\s*¥',
+                            r'(?:年収|給与|月給|月額).*?[0-9０-９]+',
+                            r'[0-9０-９]+.*?万',
+                            # より積極的な文字化けパターン
+                            r'[0-9０-９]{2,3}(?:万|円)',  # 2-3桁数字+万/円
+                            r'[0-9０-９]{3,4}(?:万|円)',  # 3-4桁数字+万/円
+                            r'[4-8][0-9０-９]{2}(?:万|円)',  # 400-899万円パターン
+                            r'[1-9][0-9０-９]{2,3}(?:万|円)',  # 100-9999万円パターン
+                            # 記号が混在している場合
+                            r'[0-9０-９]+[^\w\s]*(?:万|円)',
+                            r'¥[^\w\s]*[0-9０-９]+',
+                            # 部分的に文字化けした場合
+                            r'[0-9０-９]+.*?[万円]',
+                            r'(?:年収|給与|月給|月額).*?[0-9０-９]+' ,
+                        ]
+
+                        for line_obj in lines:
+                            try:
+                                # linesの形式を確認
+                                if isinstance(line_obj, dict):
+                                    line_text = line_obj.get('text', '')
+                                else:
+                                    print(f"[DEBUG] Unexpected line_obj type: {type(line_obj)}")
+                                    continue
+
+                                if not line_text:
+                                    continue
+
+                                # 給与系キーワードを含む行のみ対象
+                                if not KEYWORDS_PATTERN.search(line_text):
+                                    continue
+
+                                for pattern in garbled_money_patterns:
+                                    matches = re.finditer(pattern, line_text, re.IGNORECASE)
+                                    for match in matches:
+                                        for token in line_obj['tokens']:
+                                            # token は (x0, y0, x1, y1, text) のタプル形式
+                                            if len(token) >= 5:
+                                                token_text = token[4]
+                                                # マッチ範囲内のトークンをマスキング（数字トークンに限定）
+                                                if re.search(r'[0-9０-９]+', token_text):
+                                                    rect = fitz.Rect(token[0], token[1], token[2], token[3])
+                                                    page.add_redact_annot(rect, fill=(1, 1, 1))
+                                                    removed_items.append(
+                                                        (pindex + 1, f"[GARBLED] {token_text} in line: {line_text[:50]}...")
+                                                    )
+                                                    print(f"[DEBUG] GARBLED MASKED: {token_text} at {rect}")
+                            except Exception as e3:
+                                print(f"[DEBUG] Error processing line in aggressive masking: {e3}")
+                                continue
+
+                        page.apply_redactions()
+                        continue
+                    else:
+                        if DISABLE_AGGRESSIVE_MASKING:
+                            print(f"[DEBUG] Aggressive masking disabled; skipping garbled-money masking on page {pindex+1}")
+
+                    # 全ページ対象のフォールバック: すべての数字を含む文字をマスキング
+                    # ただし、文字化けの無差別マスキングは制御可能
+                    if not DISABLE_AGGRESSIVE_MASKING:
+                        print(f"[DEBUG] Applying universal fallback masking on page {pindex+1}")
+                        try:
+                            lines = group_words_into_lines(page, NEAR_RANGE)
+                        except Exception as e:
+                            print(f"[DEBUG] Error in fallback line processing: {e}")
+                            # 代替方法: ページ全体をマスクする
+                            try:
+                                page_text = pdfp_page.extract_text() or ""
+                                if re.search(r'[0-9０-９]', page_text):
+                                    # ページ全体をマスク
+                                    page_rect = page.rect
+                                    page.add_redact_annot(page_rect, fill=(1, 1, 1))
+                                    print(f"[DEBUG] Emergency full-page mask applied to page {pindex+1}")
+                                    removed_items.append((pindex + 1, f"[FULL-PAGE] Emergency mask - contains numbers"))
+                            except Exception as e2:
+                                print(f"[DEBUG] Emergency mask also failed: {e2}")
                             page.apply_redactions()
                             continue
 
-                # 通常のテキスト処理のためのテキスト取得
-                try:
-                    page_text = pdfp_page.extract_text() or ""
-                except Exception:
-                    page_text = ""
+                        fallback_masks = 0
+                        for line_obj in lines:
+                            # Handle different token formats
+                            line_texts = []
+                            for token in line_obj['tokens']:
+                                if isinstance(token, dict):
+                                    line_texts.append(token.get('text', ''))
+                                elif isinstance(token, (list, tuple)) and len(token) >= 5:
+                                    line_texts.append(token[4])  # text is at index 4
+                                else:
+                                    line_texts.append(str(token))
+                            line_text = ' '.join(line_texts)
 
-                # 文字化けページ向けの積極的マスキング（AI処理後のフォールバック）
-                if _text_quality_ratio(page_text) < 0.7:  # 閾値を0.3から0.7に上げて、より多くのページで積極的マスキング
-                    print(f"[DEBUG] Low quality text on page {pindex+1} (quality: {_text_quality_ratio(page_text):.2f}) -> Using aggressive masking")
-                    
-                    # まず通常のlines処理を実行してlinesを定義
-                    try:
-                        # ページの全テキストをトークンで行にグループ化（正しい引数で呼び出し）
-                        lines = group_words_into_lines(page, NEAR_RANGE)
-                    except Exception as e:
-                        print(f"[DEBUG] Error in line processing: {e}")
-                        lines = []
-                        # エラーの場合は別の方法で処理
-                        try:
-                            # 代替方法: pdfplumberからテキストを取得
-                            page_text = pdfp_page.extract_text() or ""
-                            # 簡単な行分割でダミーのlinesを作成（group_words_into_lines形式に合わせる）
-                            text_lines = page_text.split('\n')
-                            lines = []
-                            for i, line_text in enumerate(text_lines):
-                                if line_text.strip():
-                                    # group_words_into_lines()の戻り値形式に合わせる
-                                    lines.append({
-                                        'line_index': i,
-                                        'tokens': [(0, i*20, 595, (i+1)*20, line_text.strip())],  # (x0,y0,x1,y1,text)形式
-                                        'y': i*20,
-                                        'text': line_text.strip()
-                                    })
-                        except Exception as e2:
-                            print(f"[DEBUG] Alternative line processing also failed: {e2}")
-                            lines = []
-                    
-                    # 文字化けテキストからも金額パターンを検出
-                    garbled_money_patterns = [
-                        r'[0-9０-９][0-9０-９,\.\s]*\s*(?:万\s*円|万円|円|¥|￥|万)',
-                        r'[0-9０-９]+\s*(?:万|円)',
-                        r'¥\s*[0-9０-９]+',
-                        r'[0-9０-９]+\s*¥',
-                        r'年収.*?[0-9０-９]+',
-                        r'給与.*?[0-9０-９]+',
-                        r'月給.*?[0-9０-９]+',
-                        r'[0-9０-９]+.*?万',
-                        # より積極的な文字化けパターン
-                        r'[0-9０-９]{2,3}(?:万|円)',  # 2-3桁数字+万/円
-                        r'[0-9０-９]{3,4}(?:万|円)',  # 3-4桁数字+万/円
-                        r'[4-8][0-9０-９]{2}(?:万|円)',  # 400-899万円パターン
-                        r'[1-9][0-9０-９]{2,3}(?:万|円)',  # 100-9999万円パターン
-                        # 記号が混在している場合
-                        r'[0-9０-９]+[^\w\s]*(?:万|円)',
-                        r'¥[^\w\s]*[0-9０-９]+',
-                        # 部分的に文字化けした場合
-                        r'[0-9０-９]+.*?[万円]',
-                        r'[年収給与月額].*?[0-9０-９]+',
-                    ]
-                    
-                    for line_obj in lines:
-                        try:
-                            # linesの形式を確認
-                            if isinstance(line_obj, dict):
-                                line_text = line_obj.get('text', '')
-                            else:
-                                print(f"[DEBUG] Unexpected line_obj type: {type(line_obj)}")
-                                continue
-                                
-                            if not line_text:
-                                continue
-                                
-                            for pattern in garbled_money_patterns:
-                                matches = re.finditer(pattern, line_text, re.IGNORECASE)
-                                for match in matches:
-                                    for token in line_obj['tokens']:
-                                        # token は (x0, y0, x1, y1, text) のタプル形式
-                                        if len(token) >= 5:
-                                            token_text = token[4]
-                                            # マッチ範囲内のトークンをマスキング
-                                            if re.search(r'[0-9０-９]+', token_text):
-                                                rect = fitz.Rect(token[0], token[1], token[2], token[3])
-                                                page.add_redact_annot(rect, fill=(1,1,1))
-                                                removed_items.append(
-                                                    (pindex+1, f"[GARBLED] {token_text} in line: {line_text[:50]}...")
-                                                )
-                                                print(f"[DEBUG] GARBLED MASKED: {token_text} at {rect}")
-                        except Exception as e3:
-                            print(f"[DEBUG] Error processing line in aggressive masking: {e3}")
-                            continue
-                    
-                    page.apply_redactions()
-                    continue
+                            # 任意の数字を含む行をマスキング
+                            if re.search(r'[0-9０-９]', line_text):
+                                print(f"[DEBUG] Fallback mask line with numbers: '{line_text[:50]}...'")
+                                for token in line_obj['tokens']:
+                                    token_text = ""
+                                    bbox = [0, 0, 0, 0]
 
-                # 全ページ対象のフォールバック: すべての数字を含む文字をマスキング
-                # ただし、文字化けの無差別マスキングは制御可能
-                if not DISABLE_AGGRESSIVE_MASKING:
-                    print(f"[DEBUG] Applying universal fallback masking on page {pindex+1}")
-                    try:
-                        lines = group_words_into_lines(page, NEAR_RANGE)
-                    except Exception as e:
-                        print(f"[DEBUG] Error in fallback line processing: {e}")
-                        # 代替方法: ページ全体をマスクする
-                        try:
-                            page_text = pdfp_page.extract_text() or ""
-                            if re.search(r'[0-9０-９]', page_text):
-                                # ページ全体をマスク
-                                page_rect = page.rect
-                                page.add_redact_annot(page_rect, fill=(1,1,1))
-                                print(f"[DEBUG] Emergency full-page mask applied to page {pindex+1}")
-                                removed_items.append((pindex+1, f"[FULL-PAGE] Emergency mask - contains numbers"))
-                        except Exception as e2:
-                            print(f"[DEBUG] Emergency mask also failed: {e2}")
+                                    if isinstance(token, dict):
+                                        token_text = token.get('text', '')
+                                        bbox = token.get('bbox', [0, 0, 0, 0])
+                                    elif isinstance(token, (list, tuple)) and len(token) >= 5:
+                                        token_text = token[4]
+                                        bbox = [token[0], token[1], token[2], token[3]]
+
+                                    if re.search(r'[0-9０-９]', token_text):
+                                        rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+                                        page.add_redact_annot(rect, fill=(1, 1, 1))
+                                        removed_items.append(
+                                            (pindex + 1, f"[FALLBACK] {token_text} in line: {line_text[:50]}...")
+                                        )
+                                        fallback_masks += 1
+                                        print(f"[DEBUG] FALLBACK MASKED: {token_text} at {rect}")
+
+                        print(f"[DEBUG] Applied {fallback_masks} fallback masks on page {pindex+1}")
                         page.apply_redactions()
                         continue
-                
-                    fallback_masks = 0
-                    for line_obj in lines:
-                        # Handle different token formats
-                        line_texts = []
-                        for token in line_obj['tokens']:
-                            if isinstance(token, dict):
-                                line_texts.append(token.get('text', ''))
-                            elif isinstance(token, (list, tuple)) and len(token) >= 5:
-                                line_texts.append(token[4])  # text is at index 4
-                            else:
-                                line_texts.append(str(token))
-                        line_text = ' '.join(line_texts)
-                        
-                        # 任意の数字を含む行をマスキング
-                        if re.search(r'[0-9０-９]', line_text):
-                            print(f"[DEBUG] Fallback mask line with numbers: '{line_text[:50]}...'")
-                            for token in line_obj['tokens']:
-                                token_text = ""
-                                bbox = [0, 0, 0, 0]
-                                
-                                if isinstance(token, dict):
-                                    token_text = token.get('text', '')
-                                    bbox = token.get('bbox', [0, 0, 0, 0])
-                                elif isinstance(token, (list, tuple)) and len(token) >= 5:
-                                    token_text = token[4]
-                                    bbox = [token[0], token[1], token[2], token[3]]
-                                
-                                if re.search(r'[0-9０-９]', token_text):
-                                    rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-                                    page.add_redact_annot(rect, fill=(1,1,1))
-                                    removed_items.append(
-                                        (pindex+1, f"[FALLBACK] {token_text} in line: {line_text[:50]}...")
-                                    )
-                                    fallback_masks += 1
-                                    print(f"[DEBUG] FALLBACK MASKED: {token_text} at {rect}")
-                    
-                    print(f"[DEBUG] Applied {fallback_masks} fallback masks on page {pindex+1}")
-                    page.apply_redactions()
-                    continue
-                else:
-                    # アグレッシブマスキングが無効の場合、ルールベース処理へ進む
-                    print(f"[DEBUG] Aggressive masking disabled, proceeding to rule-based processing on page {pindex+1}")
+                    else:
+                        # アグレッシブマスキングが無効の場合、ルールベース処理へ進む
+                        print(f"[DEBUG] Aggressive masking disabled, proceeding to rule-based processing on page {pindex+1}")
 
-                # ルールベース
-                # ルールでもテキスト品質が悪ければOCR行を利用
-                page_text = full_text or ""
-                if OCR_IF_GARBLED and _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO:
-                    print(f"[DEBUG] Low quality text on page {pindex+1} -> Using OCR lines (rules path)")
-                    # mask_money_in_nearby_salary_lines は内部で group_words_into_lines を呼ぶため
-                    # シンプルにOCR行を使う別ルートは用意せず、ページ全体fallbackを期待する。
-                    # ただし、最低限のmoneyパターンをOCR行にも適用する軽処理を追加。
-                    ocr_lines = ocr_extract_lines(page)
-                    before = len(removed_items)
-                    for ln in ocr_lines:
-                        mask_line_money_pattern(page, ln, removed_items, pindex)
-                    if len(removed_items) == before:
-                        # 何も取れなければ通常ロジックへ（内部fallbackがさらに走る）
+                    # ルールベース
+                    # ルールでもテキスト品質が悪ければOCR行を利用
+                    page_text = full_text or ""
+                    if OCR_IF_GARBLED and _text_quality_ratio(page_text) < OCR_GARBLED_MIN_RATIO:
+                        print(f"[DEBUG] Low quality text on page {pindex+1} -> Using OCR lines (rules path)")
+                        # mask_money_in_nearby_salary_lines は内部で group_words_into_lines を呼ぶため
+                        # シンプルにOCR行を使う別ルートは用意せず、ページ全体fallbackを期待する。
+                        # ただし、最低限のmoneyパターンをOCR行にも適用する軽処理を追加。
+                        ocr_lines = ocr_extract_lines(page)
+                        before = len(removed_items)
+                        for ln in ocr_lines:
+                            mask_line_money_pattern(page, ln, removed_items, pindex)
+                        if len(removed_items) == before:
+                            # 何も取れなければ通常ロジックへ（内部fallbackがさらに走る）
+                            mask_money_in_nearby_salary_lines(page, removed_items, pindex, page_text)
+                    else:
                         mask_money_in_nearby_salary_lines(page, removed_items, pindex, page_text)
-                else:
-                    mask_money_in_nearby_salary_lines(page, removed_items, pindex, page_text)
-                page.apply_redactions()
+                    page.apply_redactions()
 
-                # 保存
+                # ページループ完了後の正常処理: 保存・ログ出力・リスト追加（try ブロック内、for pindex の外）
                 out_pdf_name = f"maskedfix_{file_.filename}"
                 out_pdf_path = os.path.join('output', out_pdf_name)
                 doc.save(out_pdf_path, deflate=True, clean=True)
-                
-                # リソース解放とメモリクリーンアップ
-                doc.close()
-                plumber_pdf.close()
-                del doc, plumber_pdf  # 明示的削除
-                gc.collect()  # ガベージコレクション実行
 
-                # ログ出力
                 out_log_name = f"masked_{os.path.splitext(file_.filename)[0]}.txt"
                 out_log_path = os.path.join('output', out_log_name)
                 if removed_items:
@@ -1013,35 +1098,108 @@ def upload():
                         for (pg, txt) in removed_items:
                             f.write(f"Page:{pg}, RedactedText:{txt}\n")
                 else:
+                    # 空でもファイルは作っておく（ZIPに含めるため）
                     open(out_log_path, "w").close()
 
                 output_pdfs.append(out_pdf_path)
                 log_files.append(out_log_path)
                 processed_count += 1
-                
                 print(f"[INFO] Successfully processed {file_.filename} ({processed_count}/{len(files)})")
-                
+
             except Exception as e:
                 print(f"[ERROR] Failed to process file {file_.filename}: {e}")
-                
                 # エラーファイルに対してもエラーログを作成
                 try:
+                    os.makedirs('output', exist_ok=True)
                     error_log_name = f"error_{os.path.splitext(file_.filename)[0]}.txt"
                     error_log_path = os.path.join('output', error_log_name)
                     with open(error_log_path, "w", encoding="utf-8") as f:
                         f.write(f"Error processing file: {file_.filename}\n")
                         f.write(f"Error details: {str(e)}\n")
-                        f.write(f"Timestamp: {gc.get_count()}\n")  # タイムスタンプの代わり
-                    
                     log_files.append(error_log_path)
                     print(f"[INFO] Created error log for {file_.filename}")
                 except Exception as log_error:
                     print(f"[ERROR] Could not create error log for {file_.filename}: {log_error}")
-                
-                # エラーでもcontinueして次のファイルへ
 
-        # 処理結果がない場合のエラーハンドリング
+                # 例外時は元PDFをフォールバックとして返す（件数保証）
+                try:
+                    out_pdf_name = f"maskedfix_{file_.filename}"
+                    out_pdf_path = os.path.join('output', out_pdf_name)
+                    if in_pdf_path and os.path.exists(in_pdf_path):
+                        shutil.copy(in_pdf_path, out_pdf_path)
+                        output_pdfs.append(out_pdf_path)
+                        print(f"[INFO] Returned original PDF as fallback for {file_.filename}")
+                    else:
+                        # 最低限の1ページPDFを生成
+                        fail_doc = fitz.open()
+                        page = fail_doc.new_page(width=595, height=842)
+                        page.insert_text((50, 100), f"Processing failed for: {file_.filename}", fontsize=12)
+                        page.insert_text((50, 120), "See error log in ZIP.", fontsize=10)
+                        fail_doc.save(out_pdf_path)
+                        fail_doc.close()
+                        output_pdfs.append(out_pdf_path)
+                        print(f"[INFO] Created fallback placeholder PDF for {file_.filename}")
+                except Exception as placeholder_error:
+                    print(f"[ERROR] Fallback handling failed for {file_.filename}: {placeholder_error}")
+
+            finally:
+                # リソース解放（正常・異常問わず必ず実行）
+                try:
+                    if doc is not None:
+                        doc.close()
+                except Exception:
+                    pass
+                try:
+                    if plumber_pdf is not None:
+                        plumber_pdf.close()
+                except Exception:
+                    pass
+                doc = None
+                plumber_pdf = None
+                gc.collect()
+
+            # 万一、このファイルで何も出力が増えていなければ原本コピーをフォールバックで返す
+            if len(output_pdfs) == prev_out_count:
+                try:
+                    os.makedirs('output', exist_ok=True)
+                    out_pdf_name = f"maskedfix_{file_.filename}"
+                    out_pdf_path = os.path.join('output', out_pdf_name)
+                    if in_pdf_path and os.path.exists(in_pdf_path):
+                        shutil.copy(in_pdf_path, out_pdf_path)
+                        output_pdfs.append(out_pdf_path)
+                        print(f"[INFO] Fallback: copied original for {file_.filename}")
+                    else:
+                        # 最低限の1ページPDFを生成
+                        fail_doc = fitz.open()
+                        page = fail_doc.new_page(width=595, height=842)
+                        page.insert_text((50, 100), f"Processed but no output generated: {file_.filename}", fontsize=12)
+                        page.insert_text((50, 120), "Created by fallback.", fontsize=10)
+                        fail_doc.save(out_pdf_path)
+                        fail_doc.close()
+                        output_pdfs.append(out_pdf_path)
+                        print(f"[INFO] Fallback: created placeholder for {file_.filename}")
+                except Exception as post_fallback_err:
+                    print(f"[ERROR] Post-fallback failed for {file_.filename}: {post_fallback_err}")
         if not output_pdfs:
+            print(f"[ERROR] No output PDFs created. Returning logs only. logs={len(log_files)}")
+            if log_files:
+                def gen_logs_only_zip():
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for file_path in log_files:
+                            if os.path.exists(file_path):
+                                zf.write(file_path, os.path.basename(file_path))
+                    zip_buffer.seek(0)
+                    data = zip_buffer.getvalue()
+                    zip_buffer.close()
+                    return data
+                zip_data = gen_logs_only_zip()
+                return Response(
+                    zip_data,
+                    mimetype='application/zip',
+                    headers={'Content-Disposition': 'attachment; filename=maskedfix_and_texts.zip',
+                             'Content-Length': str(len(zip_data))}
+                )
             return "No files were successfully processed", 500
             
         # 単一ファイルの場合は直接返す（メモリ効率化）

@@ -3,6 +3,9 @@ FROM python:3.11-slim
 # システム依存パッケージのインストール
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-jpn \
+    tesseract-ocr-jpn-vert \
     fonts-ipafont-gothic \
     fonts-ipafont-mincho \
     fonts-noto-cjk \
